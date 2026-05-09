@@ -1100,6 +1100,22 @@ export async function runSync(engine: BrainEngine, args: string[]) {
 
   const opts: SyncOpts = { repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId, strategy: strategyArg, concurrency };
 
+  // Bug 9 follow-up — --skip-failed should acknowledge the existing failure
+  // ledger even when the repo is already at HEAD and this run does not re-hit
+  // the same files. The lower-level performSync paths still acknowledge newly
+  // recorded failures when a current run encounters them; this preflight handles
+  // the common operator path: doctor says "run sync --skip-failed", sync sees
+  // no new diff, and the warning should still clear.
+  if (skipFailed && !retryFailed) {
+    const acked = acknowledgeSyncFailures();
+    if (acked.count > 0) {
+      console.error(
+        `  Acknowledged ${acked.count} existing sync failure(s):\n` +
+        `${formatCodeBreakdown(acked.summary)}`,
+      );
+    }
+  }
+
   // Bug 9 — --retry-failed: before running normal sync, clear acknowledgment
   // flags so the sync picks them up as fresh work. The actual re-attempt
   // happens inside the regular incremental/full loop because once the commit
