@@ -1,0 +1,26 @@
+# Public access tier semantics for gbrain read filtering.
+# Concrete private identity bindings live outside this repo; tokens carry scopes:
+#   tier:full | tier:family | tier:work | tier:work_scoped | tier:none
+#   scope:<project> for scoped overlays, e.g. scope:jaci-bela
+#
+# Enforcement code: src/core/access-filter.ts and read op wrappers in
+# src/core/operations.ts. Untagged pages default-deny except for tier:full.
+
+tiers:
+  full:
+    allow_all: true
+  family:
+    allow_domains: [family, personal]
+    allow_scopes: [dads-house-sale]
+    deny_domains: [finance, work, health, identity]
+  work:
+    allow_domains: [work, tech]
+    deny_domains: [finance, health, family, personal, identity]
+  work_scoped:
+    allow_scopes_from_token: true
+  none:
+    allow_all: false
+
+sensitivity:
+  public_visible_to_all: true
+  owner_only_visible_to: [full]

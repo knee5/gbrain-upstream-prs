@@ -14,6 +14,7 @@ import { hybridSearch } from './search/hybrid.ts';
 import { expandQuery } from './search/expansion.ts';
 import { dedupResults } from './search/dedup.ts';
 import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from './eval-capture.ts';
+import { accessGrantFromScopes, filterByAccessGrant, isVisibleToAccessGrant, FULL_GRANT } from './access-filter.ts';
 import type { HybridSearchMeta } from './types.ts';
 import { extractPageLinks, isAutoLinkEnabled, isAutoTimelineEnabled, parseTimelineEntries, makeResolver, type UnresolvedFrontmatterRef } from './link-extraction.ts';
 import * as db from './db.ts';
@@ -330,6 +331,32 @@ export interface Operation {
   };
 }
 
+function accessGrantForContext(ctx: OperationContext) {
+  // Local CLI is the owner/trusted OS boundary. Internal minion/subagent calls
+  // run under the owner's orchestrator and keep Full read access; write paths
+  // still have their separate namespace/allow-list guards below.
+  if (ctx.remote === false || ctx.viaSubagent === true) return FULL_GRANT;
+
+  // External/API callers must carry explicit tier scopes. Legacy remote tokens
+  // without tier scopes now see no tagged brain pages (fail-closed for Phase-2
+  // access policy enforcement).
+  return accessGrantFromScopes(ctx.auth?.scopes);
+}
+
+async function canReadSlug(ctx: OperationContext, slug: string): Promise<boolean> {
+  const grant = accessGrantForContext(ctx);
+  if (grant.tiers.includes('full')) return true;
+  return isVisibleToAccessGrant(await ctx.engine.getTags(slug), grant);
+}
+
+async function filterReadableRows<T extends { slug: string }>(ctx: OperationContext, rows: readonly T[]): Promise<T[]> {
+  return filterByAccessGrant(rows, accessGrantForContext(ctx), (slug) => ctx.engine.getTags(slug));
+}
+
+function notFoundForAccess(slug: string): OperationError {
+  return new OperationError('page_not_found', `Page not found: ${slug}`, 'Check the slug or request access from the brain owner');
+}
+
 // --- Page CRUD ---
 
 const get_page: Operation = {
@@ -363,6 +390,9 @@ const get_page: Operation = {
     }
 
     const tags = await ctx.engine.getTags(page.slug);
+    if (!isVisibleToAccessGrant(tags, accessGrantForContext(ctx))) {
+      throw notFoundForAccess(page.slug);
+    }
     return { ...page, tags, ...(resolved_slug ? { resolved_slug } : {}) };
   },
   scope: 'read',
@@ -777,7 +807,8 @@ const list_pages: Operation = {
       updated_after: typeof p.updated_after === 'string' ? p.updated_after : undefined,
       sort,
     });
-    return pages.map(pg => ({
+    const readable = await filterReadableRows(ctx, pages);
+    return readable.map(pg => ({
       slug: pg.slug,
       type: pg.type,
       title: pg.title,
@@ -806,7 +837,7 @@ const search: Operation = {
       limit: (p.limit as number) || 20,
       offset: (p.offset as number) || 0,
     });
-    const results = dedupResults(raw);
+    const results = await filterReadableRows(ctx, dedupResults(raw));
     const latency_ms = Date.now() - startedAt;
 
     // Op-layer capture (v0.25.0). Fire-and-forget — no await on the
@@ -915,7 +946,7 @@ const query: Operation = {
         offset: (p.offset as number) || 0,
         embeddingColumn: 'embedding_image',
       });
-      return results;
+      return filterReadableRows(ctx, results);
     }
 
     if (!queryText) {
@@ -926,7 +957,7 @@ const query: Operation = {
     // stays SearchResult[] (Cathedral II callers depend on that); meta
     // arrives via callback so eval capture can record what actually ran.
     let capturedMeta: HybridSearchMeta | null = null;
-    const results = await hybridSearch(ctx.engine, queryText, {
+    const rawResults = await hybridSearch(ctx.engine, queryText, {
       limit: (p.limit as number) || 20,
       offset: (p.offset as number) || 0,
       expansion: expand,
@@ -943,6 +974,7 @@ const query: Operation = {
       until: typeof p.until === 'string' ? p.until : undefined,
       onMeta: (m) => { capturedMeta = m; },
     });
+    const results = await filterReadableRows(ctx, rawResults);
     const latency_ms = Date.now() - startedAt;
 
     // Op-layer capture (v0.25.0). Fire-and-forget. meta tells gbrain-evals
@@ -1341,7 +1373,9 @@ const get_timeline: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getTimeline(p.slug as string);
+    const slug = p.slug as string;
+    if (!(await canReadSlug(ctx, slug))) throw notFoundForAccess(slug);
+    return ctx.engine.getTimeline(slug);
   },
   scope: 'read',
   cliHints: { name: 'timeline', positional: ['slug'] },
@@ -1904,7 +1938,9 @@ const find_orphans: Operation = {
   scope: 'read',
   handler: async (ctx, p) => {
     const { findOrphans } = await import('../commands/orphans.ts');
-    return findOrphans(ctx.engine, { includePseudo: (p.include_pseudo as boolean) || false });
+    const result = await findOrphans(ctx.engine, { includePseudo: (p.include_pseudo as boolean) || false });
+    const orphans = await filterReadableRows(ctx, result.orphans);
+    return { ...result, orphans, total_orphans: orphans.length };
   },
   cliHints: { name: 'orphans', hidden: true },
 };
