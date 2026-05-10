@@ -5,6 +5,8 @@ import {
   ALLOWED_SCOPES,
   ALLOWED_SCOPES_LIST,
   assertAllowedScopes,
+  isAccessPolicyScope,
+  oauthGrantAllowsScope,
   InvalidScopeError,
   parseScopeString,
   type Scope,
@@ -91,36 +93,42 @@ describe('hasScope — multi-grant', () => {
 });
 
 // ---------------------------------------------------------------------------
-// F3 invariant: refresh-token requested-subset enforcement uses hasScope.
+// F3 invariant: refresh-token requested-subset enforcement uses oauthGrantAllowsScope.
 // Prove the v0.26.9-correct semantics (admin grant CAN refresh down to a
-// subset; non-implied scope refresh fails).
+// capability subset; access-policy scopes require exact grants).
 // ---------------------------------------------------------------------------
 
-describe('F3 refresh-token subset semantics under hasScope', () => {
+describe('F3 refresh-token subset semantics under oauthGrantAllowsScope', () => {
   test('admin grant → refresh requesting sources_admin succeeds', () => {
     const granted = ['admin'];
     const requested = ['sources_admin'];
-    expect(requested.every(s => hasScope(granted, s))).toBe(true);
+    expect(requested.every(s => oauthGrantAllowsScope(granted, s))).toBe(true);
   });
   test('admin grant → refresh requesting subset (read+write) succeeds', () => {
     const granted = ['admin'];
     const requested = ['read', 'write'];
-    expect(requested.every(s => hasScope(granted, s))).toBe(true);
+    expect(requested.every(s => oauthGrantAllowsScope(granted, s))).toBe(true);
   });
   test('write grant → refresh requesting admin fails', () => {
     const granted = ['write'];
     const requested = ['admin'];
-    expect(requested.every(s => hasScope(granted, s))).toBe(false);
+    expect(requested.every(s => oauthGrantAllowsScope(granted, s))).toBe(false);
   });
   test('write grant → refresh requesting sources_admin fails', () => {
     const granted = ['write'];
     const requested = ['sources_admin'];
-    expect(requested.every(s => hasScope(granted, s))).toBe(false);
+    expect(requested.every(s => oauthGrantAllowsScope(granted, s))).toBe(false);
   });
   test('sources_admin grant → refresh requesting users_admin fails (sibling axis)', () => {
     const granted = ['sources_admin'];
     const requested = ['users_admin'];
-    expect(requested.every(s => hasScope(granted, s))).toBe(false);
+    expect(requested.every(s => oauthGrantAllowsScope(granted, s))).toBe(false);
+  });
+  test('access-policy scopes require exact grants and do not satisfy read/write', () => {
+    expect(oauthGrantAllowsScope(['read', 'tier:family', 'scope:jaci-bela'], 'tier:family')).toBe(true);
+    expect(oauthGrantAllowsScope(['read', 'tier:family'], 'tier:full')).toBe(false);
+    expect(oauthGrantAllowsScope(['admin'], 'tier:full')).toBe(false);
+    expect(hasScope(['tier:full'], 'read')).toBe(false);
   });
 });
 
@@ -137,18 +145,24 @@ describe('ALLOWED_SCOPES — exact list pinned', () => {
     expect(ALLOWED_SCOPES.has('sources_admin')).toBe(true);
     expect(ALLOWED_SCOPES.has('users_admin')).toBe(true);
   });
-  test('list is sorted alphabetically (deterministic for wire/drift check)', () => {
+  test('wire list includes capability plus tier/overlay scope forms (deterministic for wire/drift check)', () => {
     expect([...ALLOWED_SCOPES_LIST]).toEqual([
       'admin',
       'read',
+      'scope:<name>',
       'sources_admin',
+      'tier:family',
+      'tier:full',
+      'tier:none',
+      'tier:work',
+      'tier:work_scoped',
       'users_admin',
       'write',
     ]);
   });
 });
 
-describe('isScope', () => {
+describe('isScope / isAccessPolicyScope', () => {
   test('accepts allowed strings', () => {
     expect(isScope('read')).toBe(true);
     expect(isScope('sources_admin')).toBe(true);
@@ -158,11 +172,19 @@ describe('isScope', () => {
     expect(isScope('')).toBe(false);
     expect(isScope('READ')).toBe(false); // case-sensitive
   });
+  test('access-policy scopes are valid OAuth scopes but not capability scopes', () => {
+    expect(isScope('tier:full')).toBe(false);
+    expect(isAccessPolicyScope('tier:full')).toBe(true);
+    expect(isAccessPolicyScope('tier:work_scoped')).toBe(true);
+    expect(isAccessPolicyScope('scope:jaci-bela')).toBe(true);
+    expect(isAccessPolicyScope('scope:')).toBe(false);
+    expect(isAccessPolicyScope('tier:finance')).toBe(false);
+  });
 });
 
 describe('assertAllowedScopes', () => {
   test('passes for valid set', () => {
-    expect(() => assertAllowedScopes(['read', 'sources_admin'])).not.toThrow();
+    expect(() => assertAllowedScopes(['read', 'sources_admin', 'tier:family', 'tier:work_scoped', 'scope:jaci-bela'])).not.toThrow();
   });
   test('passes for empty', () => {
     expect(() => assertAllowedScopes([])).not.toThrow();

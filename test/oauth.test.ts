@@ -877,14 +877,22 @@ describe('v0.28 ALLOWED_SCOPES allowlist', () => {
     ).rejects.toThrow(/Unknown scope/);
   });
 
-  test('registerClientManual accepts every canonical scope', async () => {
-    for (const scope of ['read', 'write', 'admin', 'sources_admin', 'users_admin']) {
+  test('registerClientManual accepts canonical capability plus tier/overlay scopes', async () => {
+    for (const scope of ['read', 'write', 'admin', 'sources_admin', 'users_admin', 'tier:full', 'tier:family', 'tier:work', 'tier:work_scoped', 'tier:none', 'scope:jaci-bela']) {
       const { clientId } = await provider.registerClientManual(
-        `accept-${scope}`, ['client_credentials'], scope,
+        `accept-${scope.replace(/[^a-z0-9_-]/gi, '-')}`, ['client_credentials'], scope,
       );
       const client = await provider.clientsStore.getClient(clientId);
       expect(client?.scope).toBe(scope);
     }
+  });
+
+  test('client credentials can issue exact tier/overlay scopes but not unregistered privacy grants', async () => {
+    const { clientId, clientSecret } = await provider.registerClientManual(
+      'issue-access-policy-scopes', ['client_credentials'], 'read tier:family scope:jaci-bela',
+    );
+    const tokens = await provider.exchangeClientCredentials(clientId, clientSecret, 'read tier:family scope:jaci-bela tier:full');
+    expect(tokens.scope).toBe('read tier:family scope:jaci-bela');
   });
 
   test('registerClient (DCR) rejects unknown scope strings', async () => {

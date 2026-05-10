@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { accessGrantFromScopes, isVisibleToAccessGrant } from '../src/core/access-filter.ts';
 import { operations, type OperationContext } from '../src/core/operations.ts';
+import { assertAllowedScopes, hasScope, oauthGrantAllowsScope } from '../src/core/scope.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 const STUB_LOGGER = { info() {}, warn() {}, error() {} };
@@ -51,6 +52,20 @@ function makeCtx(tagsBySlug: Record<string, string[]>, scopes: string[], overrid
     listPages: async () => pages,
     searchKeyword: async () => pages.map(p => makeSearchResult(p.slug)),
     getTimeline: async (slug: string) => [{ id: 1, page_id: 1, date: '2026-01-01', source: '', summary: `${slug} event`, detail: '', created_at: new Date() }],
+    getLinks: async (slug: string) => Object.keys(tagsBySlug).filter(s => s !== slug).map(to_slug => ({ from_slug: slug, to_slug, link_type: 'rel', context: '' })),
+    getBacklinks: async (slug: string) => Object.keys(tagsBySlug).filter(s => s !== slug).map(from_slug => ({ from_slug, to_slug: slug, link_type: 'rel', context: '' })),
+    traverseGraph: async (slug: string) => pages.map((p, i) => ({ slug: p.slug, title: p.title, type: p.type, depth: p.slug === slug ? 0 : i + 1, links: Object.keys(tagsBySlug).filter(s => s !== p.slug).map(to_slug => ({ to_slug, link_type: 'rel' })) })),
+    traversePaths: async (slug: string) => Object.keys(tagsBySlug).filter(s => s !== slug).map(to_slug => ({ from_slug: slug, to_slug, link_type: 'rel', context: '', depth: 1 })),
+    getVersions: async (slug: string) => [{ id: 1, page_id: 1, compiled_truth: `${slug} old`, frontmatter: {}, snapshot_at: new Date() }],
+    getRawData: async (slug: string) => [{ source: 'fixture', data: { slug }, fetched_at: new Date() }],
+    getChunks: async (slug: string) => [{ id: 1, page_id: 1, chunk_index: 0, chunk_text: `${slug} chunk`, chunk_source: 'compiled_truth', embedding: null, model: 'test', token_count: null, embedded_at: null }],
+    getRecentSalience: async () => pages.map((p, i) => ({ slug: p.slug, source_id: 'host', title: p.title, type: p.type, updated_at: new Date(), emotional_weight: 0, take_count: 0, take_avg_weight: 0, score: 10 - i })),
+    findAnomalies: async () => [{ cohort_kind: 'tag', cohort_value: 'mixed', count: Object.keys(tagsBySlug).length, baseline_mean: 0, baseline_stddev: 0, sigma_observed: 5, page_slugs: Object.keys(tagsBySlug) }],
+    getIngestLog: async () => [{ id: 1, source_type: 'test', source_ref: 'private/source', pages_updated: Object.keys(tagsBySlug), summary: 'may contain private slugs', created_at: new Date() }],
+    listTakes: async () => Object.keys(tagsBySlug).map((slug, i) => ({ id: i + 1, page_id: i + 1, page_slug: slug, row_num: i + 1, claim: `${slug} claim`, kind: 'take', holder: 'brain', weight: 0.5, source: null, active: true, created_at: new Date(), updated_at: new Date() })),
+    searchTakes: async () => Object.keys(tagsBySlug).map((slug, i) => ({ take_id: i + 1, page_id: i + 1, page_slug: slug, row_num: i + 1, claim: `${slug} claim`, kind: 'take', holder: 'brain', weight: 0.5, score: 1 })),
+    getScorecard: async () => ({ total: 1, correct: 1, incorrect: 0, partial: 0, unresolved: 0, accuracy: 1, brier: 0, by_holder: [] }),
+    getCalibrationCurve: async () => [{ bucket: '0.5', predicted_midpoint: 0.5, total: 1, correct: 1, observed_accuracy: 1, avg_weight: 0.5 }],
     ...overrides,
   } as unknown as BrainEngine;
   return {
@@ -94,6 +109,17 @@ describe('access-filter tier matrix', () => {
   });
 });
 
+describe('OAuth access-policy scope validation', () => {
+  test('tier and overlay scopes are valid OAuth scopes but do not satisfy operation capability scopes', () => {
+    expect(() => assertAllowedScopes(['read', 'tier:full', 'tier:family', 'tier:work', 'tier:work_scoped', 'tier:none', 'scope:jaci-bela'])).not.toThrow();
+    expect(() => assertAllowedScopes(['scope:', 'tier:finance'])).toThrow(/Unknown scope/);
+    expect(hasScope(['tier:full'], 'read')).toBe(false);
+    expect(oauthGrantAllowsScope(['read', 'tier:family', 'scope:jaci-bela'], 'tier:family')).toBe(true);
+    expect(oauthGrantAllowsScope(['read', 'tier:family'], 'tier:full')).toBe(false);
+    expect(oauthGrantAllowsScope(['admin'], 'sources_admin')).toBe(true);
+  });
+});
+
 describe('operations read-path access policy', () => {
   const tags = {
     'personal/day': ['domain:personal'],
@@ -129,5 +155,74 @@ describe('operations read-path access policy', () => {
       .rejects.toMatchObject({ code: 'page_not_found' });
     const allowed = await op('get_timeline').handler(makeCtx(tags, ['read', 'tier:work_scoped', 'scope:jaci-bela']), { slug: 'projects/jaci-bela/brief' }) as Array<{ summary: string }>;
     expect(allowed[0].summary).toContain('jaci-bela');
+  });
+
+  test('single-slug read surfaces deny unauthorized slug before returning data', async () => {
+    const ctx = makeCtx(tags, ['read', 'tier:family']);
+    for (const name of ['get_tags', 'get_versions', 'get_raw_data', 'get_chunks']) {
+      await expect(op(name).handler(ctx, { slug: 'finance/portfolio' }))
+        .rejects.toMatchObject({ code: 'page_not_found' });
+    }
+  });
+
+  test('graph link surfaces require readable anchor and filter unreadable endpoints', async () => {
+    const ctx = makeCtx(tags, ['read', 'tier:work_scoped', 'scope:jaci-bela']);
+    await expect(op('get_links').handler(ctx, { slug: 'finance/portfolio' }))
+      .rejects.toMatchObject({ code: 'page_not_found' });
+
+    const links = await op('get_links').handler(ctx, { slug: 'projects/jaci-bela/brief' }) as Array<{ to_slug: string }>;
+    expect(links.map(l => l.to_slug)).toEqual([]);
+
+    const backlinks = await op('get_backlinks').handler(ctx, { slug: 'projects/jaci-bela/brief' }) as Array<{ from_slug: string }>;
+    expect(backlinks.map(l => l.from_slug)).toEqual([]);
+
+    const graph = await op('traverse_graph').handler(ctx, { slug: 'projects/jaci-bela/brief' }) as Array<{ slug: string; links: Array<{ to_slug: string }> }>;
+    expect(graph.map(n => n.slug)).toEqual(['projects/jaci-bela/brief']);
+    expect(graph[0].links).toEqual([]);
+
+    const paths = await op('traverse_graph').handler(ctx, { slug: 'projects/jaci-bela/brief', direction: 'out' }) as Array<{ to_slug: string }>;
+    expect(paths).toEqual([]);
+  });
+
+  test('resolve_slugs, salience, and anomalies filter hidden slugs', async () => {
+    const ctx = makeCtx(tags, ['read', 'tier:family'], {
+      resolveSlugs: async () => ['personal/day', 'finance/portfolio', 'family/event'],
+    });
+
+    const resolved = await op('resolve_slugs').handler(ctx, { partial: 'x' }) as string[];
+    expect(resolved).toEqual(['personal/day', 'family/event']);
+
+    const salience = await op('get_recent_salience').handler(ctx, {}) as Array<{ slug: string }>;
+    expect(salience.map(r => r.slug).sort()).toEqual(['family/event', 'personal/day']);
+
+    const anomalies = await op('find_anomalies').handler(ctx, {}) as Array<{ page_slugs: string[]; count: number }>;
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0].page_slugs.sort()).toEqual(['family/event', 'personal/day']);
+    expect(anomalies[0].count).toBe(2);
+  });
+
+  test('takes read surfaces filter page slugs or deny aggregate leaks', async () => {
+    const familyCtx = makeCtx(tags, ['read', 'tier:family']);
+    const listed = await op('takes_list').handler(familyCtx, {}) as Array<{ page_slug: string }>;
+    expect(listed.map(r => r.page_slug).sort()).toEqual(['family/event', 'personal/day']);
+    await expect(op('takes_list').handler(familyCtx, { page_slug: 'finance/portfolio' }))
+      .rejects.toMatchObject({ code: 'page_not_found' });
+
+    const searched = await op('takes_search').handler(familyCtx, { query: 'claim' }) as Array<{ page_slug: string }>;
+    expect(searched.map(r => r.page_slug).sort()).toEqual(['family/event', 'personal/day']);
+
+    for (const name of ['takes_scorecard', 'takes_calibration']) {
+      await expect(op(name).handler(familyCtx, {}))
+        .rejects.toMatchObject({ code: 'permission_denied' });
+    }
+  });
+
+  test('unstructured source/ingest read surfaces are explicitly full-only', async () => {
+    for (const name of ['get_ingest_log', 'sources_list', 'sources_status']) {
+      await expect(op(name).handler(makeCtx(tags, ['read', 'tier:family']), { id: 'private-source' }))
+        .rejects.toMatchObject({ code: 'permission_denied' });
+    }
+    const full = await op('get_ingest_log').handler(makeCtx(tags, ['read', 'tier:full']), {}) as Array<{ source_ref: string }>;
+    expect(full[0].source_ref).toBe('private/source');
   });
 });

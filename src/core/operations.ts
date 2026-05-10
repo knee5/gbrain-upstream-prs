@@ -349,8 +349,24 @@ async function canReadSlug(ctx: OperationContext, slug: string): Promise<boolean
   return isVisibleToAccessGrant(await ctx.engine.getTags(slug), grant);
 }
 
+async function requireReadableSlug(ctx: OperationContext, slug: string): Promise<void> {
+  if (!(await canReadSlug(ctx, slug))) throw notFoundForAccess(slug);
+}
+
 async function filterReadableRows<T extends { slug: string }>(ctx: OperationContext, rows: readonly T[]): Promise<T[]> {
   return filterByAccessGrant(rows, accessGrantForContext(ctx), (slug) => ctx.engine.getTags(slug));
+}
+
+async function filterReadableSlugs(ctx: OperationContext, slugs: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const slug of slugs) {
+    if (await canReadSlug(ctx, slug)) out.push(slug);
+  }
+  return out;
+}
+
+function isFullAccessContext(ctx: OperationContext): boolean {
+  return accessGrantForContext(ctx).tiers.includes('full');
 }
 
 function notFoundForAccess(slug: string): OperationError {
@@ -1026,7 +1042,8 @@ const takes_list: Operation = {
     offset: { type: 'number', description: 'Skip first N rows' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.listTakes({
+    if (p.page_slug) await requireReadableSlug(ctx, p.page_slug as string);
+    const rows = await ctx.engine.listTakes({
       page_slug: p.page_slug as string | undefined,
       holder: p.holder as string | undefined,
       kind: p.kind as never,
@@ -1039,6 +1056,11 @@ const takes_list: Operation = {
       // Local CLI callers leave takesHoldersAllowList unset and see all holders.
       takesHoldersAllowList: ctx.takesHoldersAllowList,
     });
+    const out = [] as typeof rows;
+    for (const row of rows) {
+      if (!row.page_slug || await canReadSlug(ctx, row.page_slug)) out.push(row);
+    }
+    return out;
   },
   cliHints: { name: 'takes-list' },
 };
@@ -1052,10 +1074,15 @@ const takes_search: Operation = {
     limit: { type: 'number', description: 'Max results (default 30, cap 100)' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.searchTakes(p.query as string, {
+    const rows = await ctx.engine.searchTakes(p.query as string, {
       limit: p.limit as number | undefined,
       takesHoldersAllowList: ctx.takesHoldersAllowList,
     });
+    const out = [] as typeof rows;
+    for (const row of rows) {
+      if (!row.page_slug || await canReadSlug(ctx, row.page_slug)) out.push(row);
+    }
+    return out;
   },
   cliHints: { name: 'takes-search', positional: ['query'] },
 };
@@ -1079,6 +1106,9 @@ const takes_scorecard: Operation = {
     until: { type: 'string', description: 'Window end (YYYY-MM-DD)' },
   },
   handler: async (ctx, p) => {
+    if (!isFullAccessContext(ctx)) {
+      throw new OperationError('permission_denied', 'takes_scorecard requires tier:full access because aggregates can leak private page/holder activity.');
+    }
     return ctx.engine.getScorecard(
       {
         holder: p.holder as string | undefined,
@@ -1105,6 +1135,9 @@ const takes_calibration: Operation = {
     bucket_size: { type: 'number', description: 'Bucket width in (0,1]; default 0.1' },
   },
   handler: async (ctx, p) => {
+    if (!isFullAccessContext(ctx)) {
+      throw new OperationError('permission_denied', 'takes_calibration requires tier:full access because aggregates can leak private page/holder activity.');
+    }
     return ctx.engine.getCalibrationCurve(
       {
         holder: p.holder as string | undefined,
@@ -1212,7 +1245,9 @@ const get_tags: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getTags(p.slug as string);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    return ctx.engine.getTags(slug);
   },
   scope: 'read',
   cliHints: { name: 'tags', positional: ['slug'] },
@@ -1266,7 +1301,14 @@ const get_links: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getLinks(p.slug as string);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    const links = await ctx.engine.getLinks(slug);
+    const out = [] as typeof links;
+    for (const link of links) {
+      if (await canReadSlug(ctx, link.to_slug)) out.push(link);
+    }
+    return out;
   },
   scope: 'read',
 };
@@ -1278,7 +1320,14 @@ const get_backlinks: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getBacklinks(p.slug as string);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    const links = await ctx.engine.getBacklinks(slug);
+    const out = [] as typeof links;
+    for (const link of links) {
+      if (await canReadSlug(ctx, link.from_slug)) out.push(link);
+    }
+    return out;
   },
   scope: 'read',
   cliHints: { name: 'backlinks', positional: ['slug'] },
@@ -1314,10 +1363,21 @@ const traverse_graph: Operation = {
     const direction = p.direction as 'in' | 'out' | 'both' | undefined;
     // Backward compat: when neither link_type nor direction is provided, return
     // the legacy GraphNode[] shape. Once either is set, switch to GraphPath[].
+    await requireReadableSlug(ctx, slug);
     if (linkType === undefined && direction === undefined) {
-      return ctx.engine.traverseGraph(slug, depth);
+      const nodes = await ctx.engine.traverseGraph(slug, depth);
+      const readable = await filterReadableRows(ctx, nodes);
+      return readable.map(node => ({
+        ...node,
+        links: node.links.filter(link => readable.some(r => r.slug === link.to_slug)),
+      }));
     }
-    return ctx.engine.traversePaths(slug, { depth, linkType, direction });
+    const paths = await ctx.engine.traversePaths(slug, { depth, linkType, direction });
+    const out = [] as typeof paths;
+    for (const path of paths) {
+      if (await canReadSlug(ctx, path.from_slug) && await canReadSlug(ctx, path.to_slug)) out.push(path);
+    }
+    return out;
   },
   scope: 'read',
   cliHints: { name: 'graph', positional: ['slug'] },
@@ -1441,7 +1501,9 @@ const get_versions: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getVersions(p.slug as string);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    return ctx.engine.getVersions(slug);
   },
   scope: 'read',
   cliHints: { name: 'history', positional: ['slug'] },
@@ -1520,7 +1582,9 @@ const get_raw_data: Operation = {
     source: { type: 'string', description: 'Filter by source' },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getRawData(p.slug as string, p.source as string | undefined);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    return ctx.engine.getRawData(slug, p.source as string | undefined);
   },
   scope: 'read',
 };
@@ -1534,7 +1598,8 @@ const resolve_slugs: Operation = {
     partial: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.resolveSlugs(p.partial as string);
+    const matches = await ctx.engine.resolveSlugs(p.partial as string);
+    return filterReadableSlugs(ctx, matches);
   },
   scope: 'read',
 };
@@ -1546,7 +1611,9 @@ const get_chunks: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getChunks(p.slug as string);
+    const slug = p.slug as string;
+    await requireReadableSlug(ctx, slug);
+    return ctx.engine.getChunks(slug);
   },
   scope: 'read',
 };
@@ -1583,6 +1650,9 @@ const get_ingest_log: Operation = {
     limit: { type: 'number', description: 'Max entries (default 20)' },
   },
   handler: async (ctx, p) => {
+    if (!isFullAccessContext(ctx)) {
+      throw new OperationError('permission_denied', 'get_ingest_log requires tier:full access because entries may contain arbitrary source refs and summaries.');
+    }
     return ctx.engine.getIngestLog({ limit: clampSearchLimit(p.limit as number | undefined, 20, 50) });
   },
   scope: 'read',
@@ -1975,12 +2045,13 @@ const get_recent_salience: Operation = {
   },
   handler: async (ctx, p) => {
     const recencyBias = p.recency_bias === 'on' ? 'on' : 'flat';
-    return ctx.engine.getRecentSalience({
+    const rows = await ctx.engine.getRecentSalience({
       days: typeof p.days === 'number' ? p.days : undefined,
       limit: typeof p.limit === 'number' ? p.limit : undefined,
       slugPrefix: typeof p.slugPrefix === 'string' ? p.slugPrefix : undefined,
       recency_bias: recencyBias,
     });
+    return filterReadableRows(ctx, rows);
   },
   cliHints: { name: 'salience' },
 };
@@ -2004,11 +2075,17 @@ const find_anomalies: Operation = {
     },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.findAnomalies({
+    const rows = await ctx.engine.findAnomalies({
       since: typeof p.since === 'string' ? p.since : undefined,
       lookback_days: typeof p.lookback_days === 'number' ? p.lookback_days : undefined,
       sigma: typeof p.sigma === 'number' ? p.sigma : undefined,
     });
+    const out = [] as typeof rows;
+    for (const row of rows) {
+      const page_slugs = await filterReadableSlugs(ctx, row.page_slugs);
+      if (page_slugs.length > 0) out.push({ ...row, page_slugs, count: page_slugs.length });
+    }
+    return out;
   },
   cliHints: { name: 'anomalies' },
 };
@@ -2192,6 +2269,9 @@ const sources_list: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (!isFullAccessContext(ctx)) {
+      throw new OperationError('permission_denied', 'sources_list requires tier:full access because source metadata can reveal private repository/path information.');
+    }
     const { listSources } = await import('./sources-ops.ts');
     return {
       sources: await listSources(ctx.engine, {
@@ -2248,6 +2328,9 @@ const sources_status: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (!isFullAccessContext(ctx)) {
+      throw new OperationError('permission_denied', 'sources_status requires tier:full access because source metadata can reveal private repository/path information.');
+    }
     const { getSourceStatus } = await import('./sources-ops.ts');
     return getSourceStatus(ctx.engine, p.id as string);
   },

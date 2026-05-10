@@ -23,7 +23,7 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { hashToken, generateToken, isUndefinedColumnError } from './utils.ts';
-import { hasScope, assertAllowedScopes, parseScopeString, InvalidScopeError } from './scope.ts';
+import { hasScope, oauthGrantAllowsScope, assertAllowedScopes, parseScopeString, InvalidScopeError } from './scope.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -375,7 +375,7 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     // refresh — would fail when the brain admin's bootstrap token was
     // issued at the `admin` tier.
     const grantedScopes = (row.scopes as string[]) || [];
-    if (scopes && scopes.some(s => !hasScope(grantedScopes, s))) {
+    if (scopes && scopes.some(s => !oauthGrantAllowsScope(grantedScopes, s))) {
       throw new Error('Requested scope exceeds refresh token grant');
     }
     const tokenScopes = scopes ?? grantedScopes;
@@ -512,7 +512,7 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     // the cap is computed.
     const allowedScopes = parseScopeString(client.scope);
     const requestedScopes = requestedScope ? parseScopeString(requestedScope) : allowedScopes;
-    const grantedScopes = requestedScopes.filter(s => hasScope(allowedScopes, s));
+    const grantedScopes = requestedScopes.filter(s => oauthGrantAllowsScope(allowedScopes, s));
 
     // Per-client TTL override (stored in oauth_clients.token_ttl)
     // Column may not exist on PGLite/older schemas — graceful fallback

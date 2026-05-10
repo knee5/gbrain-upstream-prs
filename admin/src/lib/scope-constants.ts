@@ -10,13 +10,19 @@
  * or `bun run verify` will reject the change.
  */
 
-export type Scope = 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin';
+export type Scope = 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin' | 'scope:<name>' | 'tier:family' | 'tier:full' | 'tier:none' | 'tier:work' | 'tier:work_scoped';
 
 // MIRROR OF src/core/scope.ts ALLOWED_SCOPES_LIST — keep alphabetically sorted.
 export const ALLOWED_SCOPES_LIST: ReadonlyArray<Scope> = [
   'admin',
   'read',
+  'scope:<name>',
   'sources_admin',
+  'tier:family',
+  'tier:full',
+  'tier:none',
+  'tier:work',
+  'tier:work_scoped',
   'users_admin',
   'write',
 ];

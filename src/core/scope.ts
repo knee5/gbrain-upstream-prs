@@ -1,7 +1,7 @@
 /**
  * gbrain OAuth scope hierarchy + allowlist (v0.28).
  *
- * Single source of truth for the 5 scope strings. Used by:
+ * Single source of truth for OAuth capability scopes plus access-policy scope forms. Used by:
  *  - src/commands/serve-http.ts (scopesSupported, request-time hasScope)
  *  - src/core/oauth-provider.ts (F3 refresh, token issuance, registration)
  *  - src/commands/auth.ts (CLI register-client validation)
@@ -20,9 +20,13 @@
  *
  * sources_admin and users_admin are siblings (different axes — sources-mgmt
  * vs user-account-mgmt — neither implies the other).
+ *
+ * Access-policy scopes (`tier:*`, `scope:<overlay>`) are valid OAuth scopes,
+ * but they are not capability scopes and do not satisfy operation permissions.
  */
 
 export type Scope = 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin';
+export type AccessTierScope = 'tier:full' | 'tier:family' | 'tier:work' | 'tier:work_scoped' | 'tier:none';
 
 export const ALLOWED_SCOPES: ReadonlySet<Scope> = new Set<Scope>([
   'read',
@@ -32,14 +36,28 @@ export const ALLOWED_SCOPES: ReadonlySet<Scope> = new Set<Scope>([
   'users_admin',
 ]);
 
+export const ALLOWED_ACCESS_TIER_SCOPES: ReadonlySet<AccessTierScope> = new Set<AccessTierScope>([
+  'tier:full',
+  'tier:family',
+  'tier:work',
+  'tier:work_scoped',
+  'tier:none',
+]);
+
 /**
  * Sorted list (deterministic for OAuth metadata + drift-check output).
  * Use this when emitting `scopes_supported` over the wire.
  */
-export const ALLOWED_SCOPES_LIST: ReadonlyArray<Scope> = Object.freeze([
+export const ALLOWED_SCOPES_LIST: ReadonlyArray<string> = Object.freeze([
   'admin',
   'read',
+  'scope:<name>',
   'sources_admin',
+  'tier:family',
+  'tier:full',
+  'tier:none',
+  'tier:work',
+  'tier:work_scoped',
   'users_admin',
   'write',
 ]);
@@ -81,6 +99,27 @@ export function isScope(s: string): s is Scope {
   return ALLOWED_SCOPES.has(s as Scope);
 }
 
+export function isAccessPolicyScope(s: string): boolean {
+  if (ALLOWED_ACCESS_TIER_SCOPES.has(s as AccessTierScope)) return true;
+  return /^scope:[a-z0-9][a-z0-9_-]{0,63}$/.test(s);
+}
+
+export function isAllowedOAuthScope(s: string): boolean {
+  return isScope(s) || isAccessPolicyScope(s);
+}
+
+/**
+ * Does a registered/granted OAuth scope set allow issuing/requesting `requested`?
+ * Capability scopes preserve the operation hierarchy (`admin` implies write/read,
+ * write implies read). Access-policy tier/overlay scopes are exact grants only:
+ * an OAuth admin token is not automatically a `tier:full` privacy grant.
+ */
+export function oauthGrantAllowsScope(grantedScopes: readonly string[], requested: string): boolean {
+  if (isScope(requested)) return hasScope(grantedScopes, requested);
+  if (isAccessPolicyScope(requested)) return grantedScopes.includes(requested);
+  return false;
+}
+
 /**
  * Validate that every scope in the input is allowed. Throws on the first
  * unknown scope. Used at OAuth client registration time (CLI, DCR, manual).
@@ -96,7 +135,7 @@ export class InvalidScopeError extends Error {
 
 export function assertAllowedScopes(scopes: readonly string[]): void {
   for (const s of scopes) {
-    if (!isScope(s)) throw new InvalidScopeError(s, scopes);
+    if (!isAllowedOAuthScope(s)) throw new InvalidScopeError(s, scopes);
   }
 }
 
