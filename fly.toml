@@ -8,6 +8,12 @@ primary_region = "sjc"
 [build]
   dockerfile = "Dockerfile"
 
+[deploy]
+  # Apply only database schema migrations in Fly's one-shot release VM. The
+  # broader apply-migrations command also manages host-file orchestrators and a
+  # local migration ledger, which do not belong in an ephemeral release image.
+  release_command = "/app/bin/gbrain init --migrate-only --json"
+
 [env]
   PORT = "3131"
   # Express `trust proxy = 1`: take the hop Fly appended to X-Forwarded-For as the

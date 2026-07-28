@@ -2,7 +2,7 @@
 # Builder compiles a Linux x64 single-file binary via Bun --compile.
 # Runtime image holds the compiled binary + admin/dist static assets.
 
-FROM oven/bun:1 AS builder
+FROM oven/bun:1.3.11 AS builder
 WORKDIR /app
 
 # Install deps with the lockfile pinned
@@ -11,16 +11,19 @@ RUN bun install --frozen-lockfile
 
 # Build the admin SPA + the gbrain binary
 COPY . .
-RUN bun run build:admin || true
+RUN bun run build:admin
 RUN bun build --compile --target=bun-linux-x64 --outfile bin/gbrain src/cli.ts
 
 
-FROM oven/bun:1
+FROM oven/bun:1.3.11
 WORKDIR /app
 
-# Compiled binary + admin static assets
+# Compiled binary + admin static assets + the bundled schema packs. Bun's
+# compiled import.meta.url resolves under /$bunfs/root/gbrain, whose loader
+# fallback is /src/core/schema-pack/base in the runtime filesystem.
 COPY --from=builder /app/bin/gbrain /app/bin/gbrain
 COPY --from=builder /app/admin/dist /app/admin/dist
+COPY --from=builder /app/src/core/schema-pack/base /src/core/schema-pack/base
 
 # Tighter exec context — gbrain expects to find admin/dist relative to cwd
 ENV PATH="/app/bin:${PATH}"
