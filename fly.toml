@@ -1,0 +1,55 @@
+# fly.toml — gbrain Remote MCP HTTP server
+# App: gbrain-knee5 (knee5's private brain — not the upstream gbrain repo's deployment)
+# This file lives in the knee5/gbrain fork only; ignore for upstream PRs.
+
+app = "gbrain-knee5"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3131"
+  # Express `trust proxy = 1`: take the hop Fly appended to X-Forwarded-For as the
+  # client IP, so the pre-auth rate limiter buckets per caller instead of collapsing
+  # the whole internet onto Fly's proxy address. Entries a client forges sit to the
+  # left of Fly's and are ignored. The var was GBRAIN_TRUST_PROXY until 2026-07-27,
+  # which matches nothing in the source and silently did nothing.
+  GBRAIN_HTTP_TRUST_PROXY = "1"
+
+[http_service]
+  internal_port = 3131
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  # 256 -> 512 on 2026-07-27. The Bun runtime baseline plus pgvector result sets
+  # left very little headroom, and an OOM-restart loop here reads as "endpoint is
+  # up" to anything that only checks liveness. ~+$1.30/mo.
+  memory_mb = 512
+
+[processes]
+  # No --enable-dcr. Dynamic Client Registration is an UNAUTHENTICATED endpoint:
+  # with it on, any caller on the internet could register a client and, before the
+  # consent gate landed in v0.42.55.0, mint an admin-scoped token to the whole
+  # brain. Vendor clients are pre-registered instead, via `gbrain auth
+  # register-client` / the admin API. Never add --enable-dcr-insecure.
+  # --suppress-bootstrap-token keeps the admin token out of the Fly logs on every
+  # restart; the value comes from the GBRAIN_ADMIN_BOOTSTRAP_TOKEN secret instead.
+  # --bind 0.0.0.0 is REQUIRED: v0.34.1 changed the default bind to 127.0.0.1, so
+  # without it Fly's proxy cannot reach the app and the health check fails (observed
+  # on the 2026-07-27 v2 deploy: "Bind: 127.0.0.1" + servicecheck critical). Inside a
+  # Fly machine the only inbound route is Fly's proxy, so binding all interfaces does
+  # not widen exposure — auth gatekeeps and DCR stays off.
+  app = "/app/bin/gbrain serve --http --bind 0.0.0.0 --port 3131 --suppress-bootstrap-token --public-url https://gbrain-knee5.fly.dev"

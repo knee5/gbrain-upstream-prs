@@ -1,0 +1,18 @@
+# Don't ship development cruft into the build context
+
+node_modules
+bin
+admin/node_modules
+admin/.next
+test
+docs
+*.md
+.git
+.github
+.gitignore
+.env*
+*.log
+*.bak
+coverage
+.cache
+fly.toml.bak
