@@ -242,14 +242,19 @@ export function enforceOAuthWriteSlugFence(
   opName: string,
 ): void {
   if (ctx.remote === false || ctx.auth?.scopes.includes('admin')) return;
-  // The local stdio MCP pipe and an explicitly marked subagent (already fenced
-  // above by enforceSubagentSlugFence) are the only intentional auth-less
-  // remote paths. Every other remote surface must carry an authenticated
-  // client identity; otherwise a transport regression that drops ctx.auth
-  // would silently turn a bounded OAuth writer back into an unrestricted
-  // writer.
+  // The local stdio MCP pipe and an explicitly marked subagent are the only
+  // intentional auth-less remote paths. Re-run the subagent fence here rather
+  // than assuming every caller already did so: add_tag, add_link,
+  // put_raw_data, log_ingest, and ontology_propose share this OAuth fence but
+  // do not otherwise call enforceSubagentSlugFence. Without this check a
+  // partial/forged viaSubagent context could turn those tools into
+  // unrestricted writers.
   if (!ctx.auth) {
-    if (ctx.transport === 'stdio' || ctx.viaSubagent === true) return;
+    if (ctx.transport === 'stdio') return;
+    if (ctx.viaSubagent === true) {
+      enforceSubagentSlugFence(ctx, slug, opName);
+      return;
+    }
     throw new OperationError(
       'permission_denied',
       `${opName} requires an authenticated remote identity.`,
