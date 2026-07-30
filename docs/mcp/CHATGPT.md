@@ -18,21 +18,27 @@ gbrain serve --http --port 3131
 Save the admin bootstrap token printed on stderr. Open
 `http://localhost:3131/admin` and paste it to access the dashboard.
 
-### 2. Register a ChatGPT client
+### 2. Register a trusted ChatGPT client
 
 ChatGPT uses the authorization code flow with PKCE (browser-based OAuth).
-Register from the `/admin` dashboard:
+Copy the exact OAuth redirect URI from ChatGPT's connector setup screen, then
+pre-register a public client on the GBrain host:
 
-1. Click **Register client**.
-2. Name: `chatgpt`.
-3. Grant type: `authorization_code`.
-4. Scopes: `read`, `write` (leave `admin` unchecked for ChatGPT).
-5. Redirect URI: ChatGPT's OAuth redirect (copy it from the ChatGPT
-   connector setup screen — something like
-   `https://chat.openai.com/connector_platform_oauth_redirect`).
-6. Hit **Register**. The credential-reveal modal shows the `client_id` once
-   with Copy and Download JSON buttons. There is no client secret for
-   PKCE-based public clients.
+```bash
+gbrain auth register-client chatgpt \
+  --grant-types authorization_code,refresh_token \
+  --scopes "read write" \
+  --redirect-uri "PASTE_EXACT_CHATGPT_REDIRECT_URI" \
+  --token-endpoint-auth-method none
+```
+
+Save the printed `client_id`. A PKCE public client has no client secret.
+
+The `read write` grant is intentional: a trusted ChatGPT connector is both a
+retrieval and intake surface, so it must be able to call `put_page`. Do not
+reuse a read-only dashboard/export client for ChatGPT, and do not add `admin`.
+Anonymous dynamic registration and generic `register-client` calls remain
+read-only unless the operator explicitly grants `write`.
 
 Host-repo wrappers can register programmatically:
 
@@ -62,7 +68,8 @@ connector auto-discovers the spec-compliant endpoint at
 2. Click **Add connector**.
 3. MCP server URL: `https://your-brain.ngrok.app/mcp`.
 4. Client ID: the `client_id` you saved in step 2.
-5. Click **Connect**. ChatGPT opens the OAuth consent page, you approve, and
+5. Client Secret: leave blank (PKCE public client).
+6. Click **Connect**. ChatGPT opens the OAuth consent page, you approve, and
    the connector is live.
 
 Start a new conversation and ask ChatGPT to search your brain. The MCP tool
@@ -76,8 +83,9 @@ operations are `localOnly` and rejected over HTTP regardless of scope:
 `sync_brain`, `file_upload`, `file_list`, `file_url`. The HTTP server fails
 closed for any attempt to reach local filesystem surface area.
 
-Recommended ChatGPT scope: `read write`. Leave `admin` for your local CLI
-and the admin dashboard.
+Required trusted-connector scope: `read write`. Leave `admin` for your local
+CLI and the admin dashboard. A deliberately read-only public consumer can use
+`read`, but it is not a complete GBrain intake surface.
 
 ## Troubleshooting
 

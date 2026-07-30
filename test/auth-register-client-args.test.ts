@@ -131,8 +131,16 @@ describe('parseRegisterClientArgs', () => {
         '--token-endpoint-auth-method', 'none',
       ]);
       expect(out.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+      expect(out.scopes.split(' ').sort()).toEqual(['read', 'write']);
+      expect(out.scopes).not.toContain('admin');
       expect(out.redirectUris).toEqual(['https://chatgpt.com/connector/oauth/HASH']);
       expect(out.tokenEndpointAuthMethod).toBe('none');
+    });
+
+    test('generic/public registration remains read-only unless the operator explicitly grants write', () => {
+      const out = parseRegisterClientArgs([]);
+      expect(out.scopes).toBe('read');
+      expect(out.scopes).not.toContain('write');
     });
 
     test('--redirect-uri without --grant-types → auto-infers authorization_code,refresh_token', () => {
