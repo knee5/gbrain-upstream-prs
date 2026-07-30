@@ -124,15 +124,16 @@ gbrain serve --http --port 3001 --bind 0.0.0.0 # v0.34: bind explicitly for remo
                                                 # (defaults to 127.0.0.1 since v0.34)
 gbrain auth register-client neuromancer \
   --grant-types client_credentials \
-  --scopes read,write,admin                    # admin needed for ping/doctor
+  --scopes "read write admin"                  # admin needed for ping/doctor
 
 # v0.34: source-scoped client (write to one source, federate reads across
 # multiple sources). Omit both flags for a v0.33-compatible super-client.
 gbrain auth register-client neuromancer-dept \
   --grant-types client_credentials \
-  --scopes read,write \
+  --scopes "read write" \
   --source dept-x \
-  --federated-read dept-x,shared,parent-canon
+  --federated-read dept-x,shared,parent-canon \
+  --bound-slug-prefixes "inbox/neuromancer-dept/*"
 ```
 
 The `register-client` command prints a `client_id` and `client_secret`.

@@ -13,6 +13,8 @@ import {
   buildJson,
   runConnect,
   issuerFromMcpUrl,
+  deriveOAuthWriteSlugPrefixes,
+  buildRegisterOAuthClientArgv,
   type ConnectDeps,
   AGENT_IDS,
   ENV_VAR,
@@ -305,15 +307,50 @@ describe('OAuth helpers', () => {
     expect(issuerFromMcpUrl('https://brain.example.com/mcp')).toBe('https://brain.example.com');
   });
 
+  test('routine writers get a validated per-client inbox namespace', () => {
+    expect(deriveOAuthWriteSlugPrefixes('perplexity', 'read write'))
+      .toEqual(['inbox/perplexity/*']);
+    expect(deriveOAuthWriteSlugPrefixes('client_name', 'write'))
+      .toEqual(['inbox/client-name/*']);
+  });
+
+  test('read-only and admin registrations do not need a routine-write namespace', () => {
+    expect(deriveOAuthWriteSlugPrefixes('perplexity', 'read')).toBeUndefined();
+    expect(deriveOAuthWriteSlugPrefixes('perplexity', 'read write admin')).toBeUndefined();
+  });
+
+  test('register-client argv includes the derived namespace only when present', () => {
+    expect(buildRegisterOAuthClientArgv(
+      'perplexity',
+      'read write',
+      ['inbox/perplexity/*'],
+    )).toEqual([
+      'auth', 'register-client', 'perplexity',
+      '--grant-types', 'client_credentials',
+      '--scopes', 'read write',
+      '--token-endpoint-auth-method', 'client_secret_post',
+      '--bound-slug-prefixes', 'inbox/perplexity/*',
+    ]);
+    expect(buildRegisterOAuthClientArgv('reader', 'read'))
+      .not.toContain('--bound-slug-prefixes');
+  });
+
   test('perplexity oauth block: issuer + client id/secret, no bearer header', () => {
     const block = buildConnectBlock({
       agent: 'perplexity', name: 'gbrain', url: 'https://h/mcp', token: null,
-      oauth: { issuer: 'https://h', clientId: 'gbrain_cl_x', clientSecret: 'gbrain_cs_y' },
+      oauth: {
+        issuer: 'https://h',
+        clientId: 'gbrain_cl_x',
+        clientSecret: 'gbrain_cs_y',
+        writeSlugPrefixes: ['inbox/gbrain/*'],
+      },
     });
     expect(block).toMatch(/Settings.+Connectors/);
     expect(block).toContain('Issuer URL:    https://h');
     expect(block).toContain('Client ID:     gbrain_cl_x');
     expect(block).toContain('Client Secret: gbrain_cs_y');
+    expect(block).toContain('Write namespace: inbox/gbrain/*');
+    expect(block).toContain('Write new pages only beneath inbox/gbrain/*');
     expect(block).toContain('OAuth 2.1 (client credentials)');
     expect(block).not.toContain('Authorization: Bearer');
     expect(block).toContain(LEARN_INSTRUCTION);
@@ -340,14 +377,21 @@ describe('OAuth helpers', () => {
   test('buildJson oauth: redacts the secret by default, exposes issuer + scopes', () => {
     const j = buildJson({
       url: 'https://h/mcp', name: 'gbrain', agent: 'perplexity', token: null, showToken: false,
-      oauth: { issuer: 'https://h', clientId: 'gbrain_cl_x', clientSecret: 'SeKrEt9' }, scopes: 'read',
+      oauth: {
+        issuer: 'https://h',
+        clientId: 'gbrain_cl_x',
+        clientSecret: 'SeKrEt9',
+        writeSlugPrefixes: ['inbox/gbrain/*'],
+      },
+      scopes: 'read write',
     });
     expect(j.auth).toBe('oauth');
     expect(j.issuer_url).toBe('https://h');
     expect(j.client_id).toBe('gbrain_cl_x');
     expect(j.client_secret).toBe(REDACTED);
     expect(j.secret_redacted).toBe(true);
-    expect(j.scopes).toBe('read');
+    expect(j.scopes).toBe('read write');
+    expect(j.write_slug_prefixes).toEqual(['inbox/gbrain/*']);
     expect(j.command).toBeNull();
     expect(JSON.stringify(j)).not.toContain('SeKrEt9');
   });
@@ -783,14 +827,28 @@ describe('runConnect --oauth', () => {
   });
 
   test('perplexity --oauth --register mints a client via the host and prints it', async () => {
+    let registration:
+      | { name: string; scopes: string; writeSlugPrefixes?: string[] }
+      | undefined;
     const r = await runWithExitCapture(
       ['https://brain.example.com/mcp', '--agent', 'perplexity', '--oauth', '--register'],
-      installDeps(), // registerOAuthClient → gbrain_cl_minted / gbrain_cs_minted
+      installDeps({
+        registerOAuthClient: (name, scopes, writeSlugPrefixes) => {
+          registration = { name, scopes, writeSlugPrefixes };
+          return { ok: true, clientId: 'gbrain_cl_minted', clientSecret: 'gbrain_cs_minted' };
+        },
+      }),
     );
     expect(r.exitCode).toBeUndefined();
+    expect(registration).toEqual({
+      name: 'gbrain',
+      scopes: DEFAULT_SCOPES,
+      writeSlugPrefixes: ['inbox/gbrain/*'],
+    });
     const out = r.out.join('\n');
     expect(out).toContain('Client ID:     gbrain_cl_minted');
     expect(out).toContain('Client Secret: gbrain_cs_minted');
+    expect(out).toContain('Write namespace: inbox/gbrain/*');
   });
 
   test('perplexity --oauth --register --json redacts the secret by default', async () => {
@@ -801,6 +859,7 @@ describe('runConnect --oauth', () => {
     const j = JSON.parse(r.out.join('\n'));
     expect(j.auth).toBe('oauth');
     expect(j.client_secret).toBe(REDACTED);
+    expect(j.write_slug_prefixes).toEqual(['inbox/gbrain/*']);
     expect(r.out.join('\n')).not.toContain('gbrain_cs_secret');
   });
 
@@ -830,6 +889,31 @@ describe('runConnect --oauth', () => {
     );
     expect(r.exitCode).toBe(1);
     expect(r.err.join('\n')).toMatch(/gbrain auth register-client/);
+    expect(r.err.join('\n')).toContain('--bound-slug-prefixes');
+    expect(r.err.join('\n')).toContain('inbox/gbrain/*');
+  });
+
+  test('read-only --oauth --register does not invent a write namespace', async () => {
+    let seenPrefixes: string[] | undefined = ['unexpected'];
+    const r = await runWithExitCapture(
+      [
+        'https://brain.example.com/mcp',
+        '--agent', 'perplexity',
+        '--oauth',
+        '--register',
+        '--scopes', 'read',
+        '--json',
+      ],
+      installDeps({
+        registerOAuthClient: (_name, _scopes, writeSlugPrefixes) => {
+          seenPrefixes = writeSlugPrefixes;
+          return { ok: true, clientId: 'gbrain_cl_reader', clientSecret: 'gbrain_cs_reader' };
+        },
+      }),
+    );
+    expect(r.exitCode).toBeUndefined();
+    expect(seenPrefixes).toBeUndefined();
+    expect(JSON.parse(r.out.join('\n')).write_slug_prefixes).toEqual([]);
   });
 
   test('--oauth is rejected for claude-code (uses bearer)', async () => {

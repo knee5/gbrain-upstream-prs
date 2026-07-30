@@ -336,7 +336,7 @@ function RegisterModal({ onClose, onRegistered }: {
               {scopes.write && !scopes.admin ? ' (required)' : ''}
             </label>
             <textarea
-              placeholder={'inbox/chatgpt/*\nprojects/speechkin/*'}
+              placeholder={'inbox/chatgpt/*\nprojects/acme-example/*'}
               value={slugPrefixes}
               onChange={e => setSlugPrefixes(e.target.value)}
               rows={3}

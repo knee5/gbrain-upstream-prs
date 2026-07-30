@@ -57,6 +57,7 @@ describe('connect bearer probe E2E (PGLite + real serve --http)', () => {
       'run', 'src/cli.ts', 'auth', 'register-client', 'e2e-perplexity-oauth',
       '--grant-types', 'client_credentials', '--scopes', 'read write',
       '--token-endpoint-auth-method', 'client_secret_post',
+      '--bound-slug-prefixes', 'inbox/e2e-perplexity-oauth/*',
     ], { cwd: process.cwd(), env, encoding: 'utf8' });
     oauthClientId = (regOut.match(/Client ID:\s+(\S+)/) ?? ['', ''])[1];
     oauthClientSecret = (regOut.match(/Client Secret:\s+(\S+)/) ?? ['', ''])[1];

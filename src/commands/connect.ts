@@ -36,6 +36,7 @@ import { execFileSync } from 'child_process';
 import type { ConnectProbeResult } from '../core/connect-probe.ts';
 import { probeBrainIdentity, DEFAULT_PROBE_TIMEOUT_MS } from '../core/connect-probe.ts';
 import { promptLine } from '../core/cli-util.ts';
+import { normalizeBoundSlugPrefixesInput } from '../core/scope.ts';
 
 export const ENV_VAR = 'GBRAIN_REMOTE_TOKEN';
 export const PLACEHOLDER_TOKEN = '<paste-your-token>';
@@ -116,6 +117,7 @@ Flags:
   --client-id <id>     With --oauth: use an existing OAuth client id
   --client-secret <s>  With --oauth: use an existing OAuth client secret
   --scopes "<s>"       With --oauth --register: client scopes (default: "${DEFAULT_SCOPES}")
+                       Non-admin writers get a validated inbox/<name>/* namespace.
   --install            Run the agent's MCP-add command, then smoke-test the token
                        (claude-code + codex only)
   --yes                Skip the install confirmation prompt
@@ -296,6 +298,29 @@ export interface OAuthCreds {
   issuer: string;
   clientId: string;
   clientSecret: string | null;
+  writeSlugPrefixes?: string[];
+}
+
+/**
+ * `connect --oauth --register` mints routine writers for third-party
+ * connectors. Give those writers a useful least-privilege intake lane by
+ * default instead of creating a client whose writes all fail closed.
+ *
+ * MCP server names permit underscores, while operation page slugs use the
+ * portable hyphenated form. Normalize that one character before validating
+ * the registration-time prefix through the shared scope helper.
+ */
+export function deriveOAuthWriteSlugPrefixes(
+  name: string,
+  scopes: string,
+): string[] | undefined {
+  const selectedScopes = new Set(scopes.split(/[\s,]+/).filter(Boolean));
+  if (!selectedScopes.has('write') || selectedScopes.has('admin')) return undefined;
+  if (!isValidName(name)) {
+    throw new Error(`Invalid OAuth client name '${name}'.`);
+  }
+  const slugSegment = name.replace(/_/g, '-');
+  return normalizeBoundSlugPrefixesInput(`inbox/${slugSegment}/*`);
 }
 
 function claudeBlock(p: { name: string; url: string; token: string | null }): string {
@@ -348,23 +373,37 @@ function perplexityBearerBlock(p: { url: string; token: string | null }): string
 
 function perplexityOAuthBlock(p: { oauth: OAuthCreds }): string {
   const secret = p.oauth.clientSecret ?? PLACEHOLDER_SECRET;
-  return [
+  const lines = [
     '# In Perplexity (Pro): Settings → Connectors → add a remote MCP server:',
     `#   URL:           ${p.oauth.issuer}/mcp`,
     '#   Auth:          OAuth 2.1 (client credentials)',
     `#   Issuer URL:    ${p.oauth.issuer}`,
     `#   Client ID:     ${p.oauth.clientId}`,
     `#   Client Secret: ${secret}`,
+  ];
+  if (p.oauth.writeSlugPrefixes?.length) {
+    lines.push(`#   Write namespace: ${p.oauth.writeSlugPrefixes.join(', ')}`);
+  }
+  lines.push(
     '',
     'OAuth is the recommended path for Perplexity (a cloud service): the connector',
     'mints short-lived, scoped access tokens instead of holding a long-lived secret.',
+  );
+  if (p.oauth.writeSlugPrefixes?.length) {
+    lines.push(
+      `Write new pages only beneath ${p.oauth.writeSlugPrefixes.join(' or ')};`,
+      'writes outside that registration-time namespace fail closed.',
+    );
+  }
+  lines.push(
     '',
     PERPLEXITY_REMOTE_NOTE,
     '',
     LEARN_INSTRUCTION,
     '',
     OAUTH_SECRET_NOTE,
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 function genericBearerBlock(p: { url: string; token: string | null }): string {
@@ -380,17 +419,31 @@ function genericBearerBlock(p: { url: string; token: string | null }): string {
 
 function genericOAuthBlock(p: { oauth: OAuthCreds }): string {
   const secret = p.oauth.clientSecret ?? PLACEHOLDER_SECRET;
-  return [
+  const lines = [
     '# Add an OAuth 2.1 (client-credentials) MCP server pointed at your gbrain:',
     `#   URL:           ${p.oauth.issuer}/mcp`,
     `#   Issuer URL:    ${p.oauth.issuer}`,
     `#   Client ID:     ${p.oauth.clientId}`,
     `#   Client Secret: ${secret}`,
+  ];
+  if (p.oauth.writeSlugPrefixes?.length) {
+    lines.push(`#   Write namespace: ${p.oauth.writeSlugPrefixes.join(', ')}`);
+  }
+  lines.push(
     '',
     LEARN_INSTRUCTION,
+  );
+  if (p.oauth.writeSlugPrefixes?.length) {
+    lines.push(
+      '',
+      `Write new pages only beneath ${p.oauth.writeSlugPrefixes.join(' or ')}; writes outside it fail closed.`,
+    );
+  }
+  lines.push(
     '',
     OAUTH_SECRET_NOTE,
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 export function buildConnectBlock(p: { agent: AgentId; name: string; url: string; token: string | null; oauth?: OAuthCreds }): string {
@@ -420,6 +473,7 @@ export function buildJson(p: { url: string; name: string; agent: AgentId; token:
       client_secret: secret == null ? null : (p.showToken ? secret : REDACTED),
       secret_redacted: secret != null && !p.showToken,
       scopes: p.scopes ?? DEFAULT_SCOPES,
+      write_slug_prefixes: p.oauth.writeSlugPrefixes ?? [],
       command: null,
       command_argv: null,
       learn_instruction: LEARN_INSTRUCTION,
@@ -467,7 +521,7 @@ export interface ConnectDeps {
   runBinary(binary: string, argv: string[]): { code: number; stdout: string; stderr: string };
   probe(url: string, token: string, timeoutMs: number): Promise<ConnectProbeResult>;
   env(name: string): string | undefined;
-  registerOAuthClient(name: string, scopes: string): RegisterResult;
+  registerOAuthClient(name: string, scopes: string, writeSlugPrefixes?: string[]): RegisterResult;
 }
 
 async function defaultPromptYesNo(question: string): Promise<boolean> {
@@ -492,13 +546,29 @@ function defaultRunBinary(binary: string, argv: string[]): { code: number; stdou
 }
 
 /** Mint an OAuth client by shelling to the host's `gbrain auth register-client`. */
-function defaultRegisterOAuthClient(name: string, scopes: string): RegisterResult {
-  const r = defaultRunBinary('gbrain', [
+export function buildRegisterOAuthClientArgv(
+  name: string,
+  scopes: string,
+  writeSlugPrefixes?: string[],
+): string[] {
+  const argv = [
     'auth', 'register-client', name,
     '--grant-types', 'client_credentials',
     '--scopes', scopes,
     '--token-endpoint-auth-method', 'client_secret_post',
-  ]);
+  ];
+  if (writeSlugPrefixes?.length) {
+    argv.push('--bound-slug-prefixes', writeSlugPrefixes.join(','));
+  }
+  return argv;
+}
+
+function defaultRegisterOAuthClient(
+  name: string,
+  scopes: string,
+  writeSlugPrefixes?: string[],
+): RegisterResult {
+  const r = defaultRunBinary('gbrain', buildRegisterOAuthClientArgv(name, scopes, writeSlugPrefixes));
   if (r.code !== 0) {
     return { ok: false, message: r.stderr || r.stdout || 'gbrain auth register-client failed' };
   }
@@ -633,17 +703,27 @@ function resolveOAuthCreds(f: ParsedFlags, url: string, deps: ConnectDeps): OAut
   if (f.clientId || f.clientSecret) {
     fail('--oauth needs BOTH --client-id and --client-secret (or use --register to mint a client).');
   }
+  const writeSlugPrefixes = deriveOAuthWriteSlugPrefixes(f.name, f.scopes);
+  const manualRegisterCommand = cmdString(
+    'gbrain',
+    buildRegisterOAuthClientArgv(f.name, f.scopes, writeSlugPrefixes),
+  );
   if (f.register) {
-    const r = deps.registerOAuthClient(f.name, f.scopes);
+    const r = deps.registerOAuthClient(f.name, f.scopes, writeSlugPrefixes);
     if (!r.ok) {
       fail(`Could not register an OAuth client (run this on the brain host where the DB lives): ${r.message}\n` +
-        `Or mint one manually: gbrain auth register-client ${f.name} --grant-types client_credentials --scopes "${f.scopes}"`);
+        `Or mint one manually: ${manualRegisterCommand}`);
     }
-    return { issuer, clientId: r.clientId, clientSecret: r.clientSecret };
+    return {
+      issuer,
+      clientId: r.clientId,
+      clientSecret: r.clientSecret,
+      writeSlugPrefixes,
+    };
   }
   return fail(
     '--oauth needs an OAuth client. Either:\n' +
-    `  • --register  (mint one on the host: gbrain auth register-client ${f.name} --grant-types client_credentials --scopes "${f.scopes}")\n` +
+    `  • --register  (mint one on the host: ${manualRegisterCommand})\n` +
     '  • --client-id <id> --client-secret <secret>  (use an existing client)',
   );
 }

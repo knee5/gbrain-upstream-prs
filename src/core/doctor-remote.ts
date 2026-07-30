@@ -486,7 +486,7 @@ export function buildScopeCheck(grantedScope: string, probe: ScopeProbeResult): 
       status: 'warn',
       message:
         'admin scope MISSING (read works). On the host, re-register: ' +
-        '`gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin`',
+        '`gbrain auth register-client <name> --grant-types client_credentials --scopes "read write admin"`',
       detail: {
         granted: grantedScope || null,
         read_ok: true,

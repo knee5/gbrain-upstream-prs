@@ -51,13 +51,18 @@ gbrain connect https://YOUR-DOMAIN.ngrok.app/mcp --agent perplexity --oauth --re
 Or register separately and pass the creds (works anywhere, no DB needed):
 
 ```bash
-gbrain auth register-client perplexity --grant-types client_credentials --scopes "read write"
+gbrain auth register-client perplexity \
+  --grant-types client_credentials \
+  --scopes "read write" \
+  --bound-slug-prefixes "inbox/perplexity/*"
 gbrain connect https://YOUR-DOMAIN.ngrok.app/mcp --agent perplexity --oauth \
   --client-id gbrain_cl_xxx --client-secret gbrain_cs_xxx
 ```
 
 `connect --oauth` prints the **Issuer URL + Client ID + Client Secret** to paste
-in step 4.
+in step 4. When `--register` creates the default `read write` client, it derives
+the same `inbox/perplexity/*`-style namespace from `--name` automatically.
+Write new pages inside that lane; writes elsewhere fail closed.
 
 **Legacy bearer token (simplest, best for local/personal):**
 

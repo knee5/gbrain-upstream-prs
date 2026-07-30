@@ -575,7 +575,7 @@ async function runThinClientRouted(
         case 'auth':
           console.error('OAuth auth failed.');
           console.error('On the host, re-register your client:');
-          console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
+          console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes "read write admin"');
           break;
         case 'auth_after_refresh':
           console.error('OAuth auth failed after token refresh. Credentials may have been revoked.');
@@ -597,7 +597,7 @@ async function runThinClientRouted(
           if (e.detail?.code === 'missing_scope') {
             console.error('Missing OAuth scope on this client.');
             console.error('On the host, re-register the client with broader scopes:');
-            console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
+            console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes "read write admin"');
           } else {
             console.error(e.message);
             console.error('Run `gbrain remote doctor` if this persists.');

@@ -261,6 +261,7 @@ describeWhen('thin-client end-to-end (requires DATABASE_URL)', () => {
       'auth', 'register-client', 'thin-client-readwrite',
       '--grant-types', 'client_credentials',
       '--scopes', 'read write',
+      '--bound-slug-prefixes', 'inbox/thin-client-readwrite/*',
     ], hostHome);
     if (reg.exitCode !== 0) throw new Error(`register-client failed: ${reg.stderr || reg.stdout}`);
     const parsed = parseRegisterClientOutput(reg.stdout);

@@ -24,7 +24,12 @@ import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { OAuthTokenRevocationRequestSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { BrainEngine } from '../core/engine.ts';
-import { operations, OperationError } from '../core/operations.ts';
+import {
+  operations,
+  OperationError,
+  enforceOAuthWriteSlugForAuth,
+  validatePageSlug,
+} from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
@@ -134,6 +139,57 @@ export function resolveOAuthTokenRateLimit(env: NodeJS.ProcessEnv = process.env)
     windowMs: parsePositiveIntEnv(env.GBRAIN_OAUTH_TOKEN_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: parsePositiveIntEnv(env.GBRAIN_OAUTH_TOKEN_RATE_LIMIT_MAX, 50),
   };
+}
+
+/**
+ * Resolve the page slug used by POST /ingest.
+ *
+ * A caller-provided X-Gbrain-Slug must fit the OAuth client's persisted
+ * write namespace. When a routine writer omits the header, generate the
+ * stable date/hash suffix beneath its first wildcard namespace instead of
+ * falling back to the global inbox. Exact-slug-only grants cannot safely
+ * synthesize a child slug, so those callers must provide the header.
+ *
+ * Admin keeps the legacy global-inbox default as the explicit operator
+ * escape hatch.
+ */
+export function resolveOAuthIngestSlug(
+  authInfo: AuthInfo,
+  callerSlug: string | undefined,
+  contentHash: string,
+  now: Date = new Date(),
+): string {
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  const suffix = `${y}-${m}-${d}-${contentHash.slice(0, 6)}`;
+
+  let slug = callerSlug;
+  if (!slug) {
+    if (authInfo.scopes.includes('admin')) {
+      slug = `inbox/${suffix}`;
+    } else {
+      const wildcard = authInfo.writeSlugPrefixes?.find(prefix => prefix.endsWith('/*'));
+      if (!wildcard) {
+        // Preserve the canonical missing-namespace error when no binding was
+        // loaded. An exact-only grant is different: it is usable, but needs
+        // an explicit header because there is no child namespace to derive.
+        if (!authInfo.writeSlugPrefixes || authInfo.writeSlugPrefixes.length === 0) {
+          enforceOAuthWriteSlugForAuth(authInfo, `inbox/${suffix}`, 'webhook_ingest');
+        }
+        throw new OperationError(
+          'invalid_params',
+          'POST /ingest cannot derive a slug from an exact-only OAuth write namespace.',
+          'Set X-Gbrain-Slug to an allowed exact slug or register a trailing /* namespace.',
+        );
+      }
+      slug = `${wildcard.slice(0, -2)}/${suffix}`;
+    }
+  }
+
+  validatePageSlug(slug);
+  enforceOAuthWriteSlugForAuth(authInfo, slug, 'webhook_ingest');
+  return slug;
 }
 
 export type ProbeHealthResult =
@@ -2169,15 +2225,26 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
       const content = body.toString('utf8');
       const contentHash = computeContentHash(content);
-      const sourceUri = (req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${Date.now()}`).slice(0, 1024);
+      const receivedAt = new Date();
+      const sourceUri = (req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${receivedAt.getTime()}`).slice(0, 1024);
       const sourceId = (req.header('x-gbrain-source-id') || `webhook-${authInfo.clientId}`).slice(0, 256);
       const callerSlug = req.header('x-gbrain-slug');
+      let resolvedSlug: string;
+      try {
+        resolvedSlug = resolveOAuthIngestSlug(authInfo, callerSlug, contentHash, receivedAt);
+      } catch (e) {
+        if (e instanceof OperationError) {
+          res.status(e.code === 'permission_denied' ? 403 : 400).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
 
       const event: IngestionEvent = {
         source_id: sourceId,
         source_kind: 'webhook',
         source_uri: sourceUri,
-        received_at: new Date().toISOString(),
+        received_at: receivedAt.toISOString(),
         content_type: contentType,
         content,
         content_hash: contentHash,
@@ -2186,7 +2253,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           ip: req.ip,
           user_agent: req.header('user-agent') ?? '',
           client_id: authInfo.clientId,
-          ...(callerSlug ? { slug: callerSlug } : {}),
+          slug: resolvedSlug,
         },
       };
 
@@ -2205,7 +2272,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           'ingest_capture',
           {
             event,
-            ...(callerSlug ? { slug: callerSlug } : {}),
+            slug: resolvedSlug,
           },
           {
             // Idempotency: same content from the same client within the
@@ -2241,6 +2308,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         res.status(202).json({
           job_id: job.id,
           content_hash: contentHash,
+          slug: resolvedSlug,
           source_id: sourceId,
           message: 'Accepted. Event queued for ingestion.',
         });

@@ -5,7 +5,8 @@
  * confined exactly like put_page: when ctx.viaSubagent=true the target slug
  * must match the trusted-workspace allow-list (when set) or the legacy
  * wiki/agents/<subagentId>/ namespace, fail-closed on a missing subagentId.
- * Non-subagent callers (CLI, plain MCP) are unchanged.
+ * Non-subagent callers still use their own trust boundary: local CLI is
+ * unrestricted, while remote OAuth writes need a registration-time namespace.
  *
  * Uses dryRun ctxs — the fence runs BEFORE the dry-run short-circuit, so no
  * engine is needed (same pattern as test/put-page-namespace.test.ts).
@@ -34,6 +35,15 @@ function makeCtx(overrides: Partial<OperationContext> = {}): OperationContext {
   };
 }
 
+function oauthWriteAuth(writeSlugPrefixes: string[]): NonNullable<OperationContext['auth']> {
+  return {
+    token: 'test-token',
+    clientId: 'timeline-write-client',
+    scopes: ['read', 'write'],
+    writeSlugPrefixes,
+  };
+}
+
 describe('add_timeline_entry subagent fence (#2778)', () => {
   describe('regression: non-subagent callers unchanged', () => {
     test('local CLI write (viaSubagent undefined) accepts arbitrary slug', async () => {
@@ -42,14 +52,21 @@ describe('add_timeline_entry subagent fence (#2778)', () => {
       expect(result).toMatchObject({ dry_run: true, action: 'add_timeline_entry', slug: 'people/alice-example' });
     });
 
-    test('MCP write (remote=true, viaSubagent=undefined) accepts arbitrary slug', async () => {
-      const ctx = makeCtx({ remote: true });
+    test('OAuth MCP write accepts a slug inside its registered namespace', async () => {
+      const ctx = makeCtx({
+        remote: true,
+        auth: oauthWriteAuth(['companies/*']),
+      });
       const result = await add_timeline_entry.handler(ctx, { slug: 'companies/acme-example', ...ENTRY });
       expect(result).toMatchObject({ dry_run: true });
     });
 
-    test('viaSubagent=false is the same as unset', async () => {
-      const ctx = makeCtx({ viaSubagent: false, subagentId: 42 });
+    test('viaSubagent=false is the same as unset for an authenticated OAuth writer', async () => {
+      const ctx = makeCtx({
+        viaSubagent: false,
+        subagentId: 42,
+        auth: oauthWriteAuth(['anything/*']),
+      });
       const result = await add_timeline_entry.handler(ctx, { slug: 'anything/goes', ...ENTRY });
       expect(result).toMatchObject({ dry_run: true });
     });

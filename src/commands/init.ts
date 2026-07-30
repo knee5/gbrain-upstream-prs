@@ -718,7 +718,7 @@ async function initRemoteMcp(opts: {
     fail(
       `token_${tokenRes.reason}`,
       `Pre-flight failed: OAuth /token — ${tokenRes.message}\n` +
-      `Hint: the host operator can run \`gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin\` to mint fresh credentials.`,
+      `Hint: the host operator can run \`gbrain auth register-client <name> --grant-types client_credentials --scopes "read write admin"\` to mint fresh credentials.`,
       { detail: tokenRes.message, ...(tokenRes.status ? { status: tokenRes.status } : {}) },
     );
   }

@@ -149,8 +149,8 @@ describe('normalizeBoundSlugPrefixesInput', () => {
 
   test('accepts comma/newline strings, lowercases, dedupes, and sorts', () => {
     expect(normalizeBoundSlugPrefixesInput(
-      'Projects/Speechkin/*,\ninbox/chatgpt/*\nprojects/speechkin/*',
-    )).toEqual(['inbox/chatgpt/*', 'projects/speechkin/*']);
+      'Projects/Acme-Example/*,\ninbox/chatgpt/*\nprojects/acme-example/*',
+    )).toEqual(['inbox/chatgpt/*', 'projects/acme-example/*']);
   });
 
   test('accepts exact slugs and namespace globs in an array', () => {

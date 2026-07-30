@@ -235,7 +235,35 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
  * the explicit operator escape hatch. Trusted local callers and auth-less
  * stdio keep their existing behavior; the latter is outside the OAuth
  * boundary and remains governed by the local-pipe deployment policy.
+ *
+ * `enforceOAuthWriteSlugForAuth` is the identity-only form used by
+ * authenticated network intake routes that do not build an OperationContext.
+ * Operation handlers use `enforceOAuthWriteSlugFence`, which additionally
+ * preserves the trusted-local, stdio, and subagent transport rules.
  */
+export function enforceOAuthWriteSlugForAuth(
+  auth: AuthInfo,
+  slug: string,
+  opName: string,
+): void {
+  if (auth.scopes.includes('admin')) return;
+  const allowList = auth.writeSlugPrefixes;
+  if (!allowList || allowList.length === 0) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} requires an OAuth write namespace; this client has no bound_slug_prefixes.`,
+      'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
+    );
+  }
+  if (!matchesSlugAllowList(slug, allowList)) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} slug '${slug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
+      'Write under an allowed prefix or ask the operator to register a different namespace.',
+    );
+  }
+}
+
 export function enforceOAuthWriteSlugFence(
   ctx: OperationContext,
   slug: string,
@@ -261,21 +289,7 @@ export function enforceOAuthWriteSlugFence(
       'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
     );
   }
-  const allowList = ctx.auth.writeSlugPrefixes;
-  if (!allowList || allowList.length === 0) {
-    throw new OperationError(
-      'permission_denied',
-      `${opName} requires an OAuth write namespace; this client has no bound_slug_prefixes.`,
-      'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
-    );
-  }
-  if (!matchesSlugAllowList(slug, allowList)) {
-    throw new OperationError(
-      'permission_denied',
-      `${opName} slug '${slug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
-      'Write under an allowed prefix or ask the operator to register a different namespace.',
-    );
-  }
+  enforceOAuthWriteSlugForAuth(ctx.auth, slug, opName);
 }
 
 /**

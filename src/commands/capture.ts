@@ -400,7 +400,10 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
     console.error(`gbrain capture: --source is not supported on thin-client installs.`);
     console.error(`Server-side OAuth client registration determines source scope.`);
     console.error(`On the server, run:`);
-    console.error(`  gbrain auth register-client <name> --source ${parsed.source} --scopes "read write"`);
+    console.error(
+      `  gbrain auth register-client <name> --source ${parsed.source} --scopes "read write" ` +
+      '--bound-slug-prefixes "inbox/<name>/*"',
+    );
     process.exit(1);
   }
 

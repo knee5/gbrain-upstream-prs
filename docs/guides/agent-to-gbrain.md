@@ -53,7 +53,8 @@ The agent registers as an OAuth client (one-time):
 ```bash
 gbrain auth register-client hermes \
   --grant-types client_credentials \
-  --scopes read,write
+  --scopes "read write" \
+  --bound-slug-prefixes "inbox/hermes/*"
 # Prints client_id + client_secret one-time. Store securely.
 ```
 
@@ -71,6 +72,8 @@ commands through the configured remote MCP. The agent can call
 - Secrets never leave the server process.
 - OAuth scopes give you `read`, `write`, `admin` separation — agent only gets
   what it needs.
+- Non-admin writers are confined to their registration-time
+  `--bound-slug-prefixes` intake lane; unbound routine writes fail closed.
 - Source-scoped tokens (`--source dept-x` on `register-client`) confine the
   agent to a specific source within a federated brain.
 - One audit surface (`mcp_request_log`) covers every op call uniformly.

@@ -192,6 +192,11 @@ curl -X POST https://your-brain/ingest \
   -d "# a thought from a Shortcut"
 ```
 
+The OAuth writer must have a registration-time slug namespace such as
+`inbox/shortcuts/*`. If `X-Gbrain-Slug` is omitted, the server derives a
+date/hash slug beneath the client's first wildcard namespace and returns it
+in the response; an explicit header outside the granted namespace is rejected.
+
 For mobile capture, the inbox folder source picks up anything dropped into
 `~/.gbrain/inbox/` from iOS Shortcuts / AirDrop / Drafts / Finder.
 
