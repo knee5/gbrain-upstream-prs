@@ -241,7 +241,21 @@ export function enforceOAuthWriteSlugFence(
   slug: string,
   opName: string,
 ): void {
-  if (ctx.remote === false || !ctx.auth || ctx.auth.scopes.includes('admin')) return;
+  if (ctx.remote === false || ctx.auth?.scopes.includes('admin')) return;
+  // The local stdio MCP pipe and an explicitly marked subagent (already fenced
+  // above by enforceSubagentSlugFence) are the only intentional auth-less
+  // remote paths. Every other remote surface must carry an authenticated
+  // client identity; otherwise a transport regression that drops ctx.auth
+  // would silently turn a bounded OAuth writer back into an unrestricted
+  // writer.
+  if (!ctx.auth) {
+    if (ctx.transport === 'stdio' || ctx.viaSubagent === true) return;
+    throw new OperationError(
+      'permission_denied',
+      `${opName} requires an authenticated remote identity.`,
+      'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
+    );
+  }
   const allowList = ctx.auth.writeSlugPrefixes;
   if (!allowList || allowList.length === 0) {
     throw new OperationError(

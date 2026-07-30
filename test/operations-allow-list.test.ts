@@ -205,6 +205,23 @@ describe('put_page — OAuth write namespace', () => {
     });
   });
 
+  test('REJECTS an unknown remote transport that failed to thread auth', async () => {
+    await expect(put_page.handler(
+      makeCtx({
+        dryRun: true,
+        remote: true,
+        auth: undefined,
+        transport: undefined,
+      }),
+      {
+        slug: 'inbox/chatgpt/page-1',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
   test('REJECTS routine OAuth writes outside the registered prefix', async () => {
     await expect(put_page.handler(
       oauthCtx(['inbox/chatgpt/*']),
