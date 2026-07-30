@@ -188,15 +188,16 @@ describe('put_page write-through — trust gating', () => {
     expect(await engine.getPage('wiki/personal/reflections/note')).not.toBeNull();
   });
 
-  test('missing trust bit fails closed as remote and never dereferences the repo path', async () => {
+  test('missing transport identity fails closed before DB or filesystem writes', async () => {
     const ctx = makeCtx({ remote: undefined as any });
-    const result = (await putPage.handler(ctx, {
+    await expect(putPage.handler(ctx, {
       slug: 'inbox/fail-closed-remote',
       content: '---\ntitle: U\n---\n\nbody',
-    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
-    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    })).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
     expect(fs.existsSync(path.join(brainDir, 'inbox/fail-closed-remote.md'))).toBe(false);
-    expect(await engine.getPage('inbox/fail-closed-remote')).not.toBeNull();
+    expect(await engine.getPage('inbox/fail-closed-remote')).toBeNull();
   });
 
   test('dry-run stays DB-only (early-return before importFromContent)', async () => {
