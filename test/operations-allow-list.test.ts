@@ -17,7 +17,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { matchesSlugAllowList, operations, OperationError, type OperationContext } from '../src/core/operations.ts';
+import {
+  isSlugGrantContained,
+  matchesSlugAllowList,
+  operations,
+  OperationError,
+  type OperationContext,
+} from '../src/core/operations.ts';
 
 const STUB_LOGGER = {
   info: () => {},
@@ -95,6 +101,26 @@ describe('matchesSlugAllowList — glob semantics', () => {
   test('does NOT match prefix without trailing segment', () => {
     expect(matchesSlugAllowList('wiki/personal/reflections',
       ['wiki/personal/reflections/*'])).toBe(false);
+  });
+
+  test('legacy trailing-slash grants retain descendant-only namespace semantics', () => {
+    expect(matchesSlugAllowList('wiki/page', ['wiki/'])).toBe(true);
+    expect(matchesSlugAllowList('wiki/deep/page', ['wiki/'])).toBe(true);
+    expect(matchesSlugAllowList('wiki', ['wiki/'])).toBe(false);
+    expect(matchesSlugAllowList('wiki-evil/page', ['wiki/'])).toBe(false);
+  });
+});
+
+describe('isSlugGrantContained — legacy binding compatibility', () => {
+  test('legacy trailing-slash bindings contain exact and nested delegated grants', () => {
+    expect(isSlugGrantContained('wiki/page', 'wiki/')).toBe(true);
+    expect(isSlugGrantContained('wiki/team/*', 'wiki/')).toBe(true);
+    expect(isSlugGrantContained('wiki/team/', 'wiki/')).toBe(true);
+  });
+
+  test('legacy bindings do not contain their base or sibling namespaces', () => {
+    expect(isSlugGrantContained('wiki', 'wiki/')).toBe(false);
+    expect(isSlugGrantContained('wiki-evil/*', 'wiki/')).toBe(false);
   });
 });
 
@@ -193,6 +219,34 @@ describe('put_page — OAuth write namespace', () => {
     expect(result.dry_run).toBe(true);
   });
 
+  test('canonicalizes mixed-case slugs before authorization and persistence', async () => {
+    const result = await put_page.handler(
+      oauthCtx(['inbox/chatgpt/*']),
+      {
+        slug: 'Inbox/ChatGPT/Session-1',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    ) as { dry_run?: boolean; slug?: string };
+    expect(result).toMatchObject({
+      dry_run: true,
+      slug: 'inbox/chatgpt/session-1',
+    });
+  });
+
+  test('honors a persisted legacy trailing-slash write namespace', async () => {
+    const result = await put_page.handler(
+      oauthCtx(['wiki/']),
+      {
+        slug: 'Wiki/Imported/Page-1',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    ) as { dry_run?: boolean; slug?: string };
+    expect(result).toMatchObject({
+      dry_run: true,
+      slug: 'wiki/imported/page-1',
+    });
+  });
+
   test('REJECTS routine OAuth writes when the namespace binding is absent', async () => {
     await expect(put_page.handler(
       oauthCtx(undefined),
@@ -283,11 +337,15 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
     name: string;
     allowed: Record<string, unknown>;
     outside: Record<string, unknown>;
+    mixedCase: Record<string, unknown>;
+    canonical: Record<string, unknown>;
   }> = [
     {
       name: 'add_tag',
       allowed: { slug: 'inbox/chatgpt/page-1', tag: 'captured' },
       outside: { slug: 'people/alice-example', tag: 'captured' },
+      mixedCase: { slug: 'Inbox/ChatGPT/Page-1', tag: 'captured' },
+      canonical: { slug: 'inbox/chatgpt/page-1' },
     },
     {
       name: 'add_link',
@@ -299,6 +357,14 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
       outside: {
         from: 'inbox/chatgpt/page-1',
         to: 'people/alice-example',
+      },
+      mixedCase: {
+        from: 'Inbox/ChatGPT/Page-1',
+        to: 'Inbox/ChatGPT/Page-2',
+      },
+      canonical: {
+        from: 'inbox/chatgpt/page-1',
+        to: 'inbox/chatgpt/page-2',
       },
     },
     {
@@ -313,6 +379,12 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
         date: '2026-07-30',
         summary: 'Must not land',
       },
+      mixedCase: {
+        slug: 'Inbox/ChatGPT/Page-1',
+        date: '2026-07-30',
+        summary: 'Captured from ChatGPT',
+      },
+      canonical: { slug: 'inbox/chatgpt/page-1' },
     },
     {
       name: 'put_raw_data',
@@ -326,6 +398,12 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
         source: 'test',
         data: { ok: false },
       },
+      mixedCase: {
+        slug: 'Inbox/ChatGPT/Page-1',
+        source: 'test',
+        data: { ok: true },
+      },
+      canonical: { slug: 'inbox/chatgpt/page-1' },
     },
     {
       name: 'log_ingest',
@@ -342,6 +420,15 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
         pages_updated: ['inbox/chatgpt/page-1', 'people/alice-example'],
         summary: 'Must not claim a foreign page',
       },
+      mixedCase: {
+        source_type: 'chatgpt',
+        source_ref: 'conversation-1',
+        pages_updated: ['Inbox/ChatGPT/Page-1', 'Inbox/ChatGPT/Page-2'],
+        summary: 'Captured two pages',
+      },
+      canonical: {
+        pages_updated: ['inbox/chatgpt/page-1', 'inbox/chatgpt/page-2'],
+      },
     },
     {
       name: 'ontology_propose',
@@ -355,6 +442,12 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
         dimension: 'status',
         value: 'must-not-land',
       },
+      mixedCase: {
+        entity: 'Inbox/ChatGPT/Page-1',
+        dimension: 'status',
+        value: 'captured',
+      },
+      canonical: { entity: 'inbox/chatgpt/page-1' },
     },
   ];
 
@@ -392,6 +485,66 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
       )).rejects.toMatchObject({
         code: 'permission_denied',
       });
+    });
+
+    test(`${c.name} canonicalizes mixed-case slugs before authorization and write`, async () => {
+      const result = await findOp(c.name).handler(
+        oauthCtx(['inbox/chatgpt/*']),
+        c.mixedCase,
+      ) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        dry_run: true,
+        ...c.canonical,
+      });
+    });
+
+    test(`${c.name} passes only canonical slugs to the engine`, async () => {
+      const calls: Array<{ method: string; args: unknown[] }> = [];
+      const ctx = oauthCtx(['inbox/chatgpt/*']);
+      ctx.dryRun = false;
+      ctx.engine = new Proxy({} as OperationContext['engine'], {
+        get(_target, prop: string) {
+          return (...args: unknown[]) => {
+            calls.push({ method: prop, args });
+            return Promise.resolve({ status: 'ok' });
+          };
+        },
+      });
+
+      await findOp(c.name).handler(ctx, c.mixedCase);
+
+      switch (c.name) {
+        case 'add_tag':
+          expect(calls).toContainEqual(expect.objectContaining({
+            method: 'addTag',
+            args: expect.arrayContaining(['inbox/chatgpt/page-1']),
+          }));
+          break;
+        case 'add_link':
+          expect(calls.find(call => call.method === 'addLink')?.args.slice(0, 2))
+            .toEqual(['inbox/chatgpt/page-1', 'inbox/chatgpt/page-2']);
+          break;
+        case 'add_timeline_entry':
+          expect(calls.find(call => call.method === 'addTimelineEntry')?.args[0])
+            .toBe('inbox/chatgpt/page-1');
+          break;
+        case 'put_raw_data':
+          expect(calls.find(call => call.method === 'putRawData')?.args[0])
+            .toBe('inbox/chatgpt/page-1');
+          break;
+        case 'log_ingest':
+          expect(calls.find(call => call.method === 'logIngest')?.args[0])
+            .toMatchObject({
+              pages_updated: ['inbox/chatgpt/page-1', 'inbox/chatgpt/page-2'],
+            });
+          break;
+        case 'ontology_propose':
+          expect(calls.find(call => call.method === 'mergeOntologyFact')?.args[0])
+            .toMatchObject({ entitySlug: 'inbox/chatgpt/page-1' });
+          break;
+        default:
+          throw new Error(`missing canonical engine assertion for ${c.name}`);
+      }
     });
   }
 

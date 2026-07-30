@@ -538,6 +538,7 @@ function installDeps(over: Partial<ConnectDeps> = {}): ConnectDeps {
     probe: async () => ({ ok: true, identity: 'brain: alice-example' }),
     env: () => undefined, // tests control the env; real GBRAIN_REMOTE_TOKEN must not leak in
     registerOAuthClient: () => ({ ok: true, clientId: 'gbrain_cl_minted', clientSecret: 'gbrain_cs_minted' }),
+    oauthClientNameSuffix: () => 'a1b2c3d4',
     ...over,
   };
 }
@@ -841,14 +842,48 @@ describe('runConnect --oauth', () => {
     );
     expect(r.exitCode).toBeUndefined();
     expect(registration).toEqual({
-      name: 'gbrain',
+      name: 'gbrain-perplexity-a1b2c3d4',
       scopes: DEFAULT_SCOPES,
-      writeSlugPrefixes: ['inbox/gbrain/*'],
+      writeSlugPrefixes: ['inbox/gbrain-perplexity-a1b2c3d4/*'],
     });
     const out = r.out.join('\n');
     expect(out).toContain('Client ID:     gbrain_cl_minted');
     expect(out).toContain('Client Secret: gbrain_cs_minted');
-    expect(out).toContain('Write namespace: inbox/gbrain/*');
+    expect(out).toContain('Write namespace: inbox/gbrain-perplexity-a1b2c3d4/*');
+  });
+
+  test('repeated registrations receive distinct client identities and write lanes', async () => {
+    const registrations: Array<{ name: string; writeSlugPrefixes?: string[] }> = [];
+    const suffixes = ['a1b2c3d4', 'e5f6a7b8'];
+    const deps = installDeps({
+      oauthClientNameSuffix: () => suffixes.shift() ?? 'unexpected',
+      registerOAuthClient: (name, _scopes, writeSlugPrefixes) => {
+        registrations.push({ name, writeSlugPrefixes });
+        return {
+          ok: true,
+          clientId: `gbrain_cl_${registrations.length}`,
+          clientSecret: `gbrain_cs_${registrations.length}`,
+        };
+      },
+    });
+    await runWithExitCapture(
+      ['https://brain.example.com/mcp', '--agent', 'perplexity', '--oauth', '--register'],
+      deps,
+    );
+    await runWithExitCapture(
+      ['https://brain.example.com/mcp', '--agent', 'perplexity', '--oauth', '--register'],
+      deps,
+    );
+    expect(registrations).toEqual([
+      {
+        name: 'gbrain-perplexity-a1b2c3d4',
+        writeSlugPrefixes: ['inbox/gbrain-perplexity-a1b2c3d4/*'],
+      },
+      {
+        name: 'gbrain-perplexity-e5f6a7b8',
+        writeSlugPrefixes: ['inbox/gbrain-perplexity-e5f6a7b8/*'],
+      },
+    ]);
   });
 
   test('perplexity --oauth --register --json redacts the secret by default', async () => {
@@ -859,7 +894,7 @@ describe('runConnect --oauth', () => {
     const j = JSON.parse(r.out.join('\n'));
     expect(j.auth).toBe('oauth');
     expect(j.client_secret).toBe(REDACTED);
-    expect(j.write_slug_prefixes).toEqual(['inbox/gbrain/*']);
+    expect(j.write_slug_prefixes).toEqual(['inbox/gbrain-perplexity-a1b2c3d4/*']);
     expect(r.out.join('\n')).not.toContain('gbrain_cs_secret');
   });
 
@@ -890,7 +925,7 @@ describe('runConnect --oauth', () => {
     expect(r.exitCode).toBe(1);
     expect(r.err.join('\n')).toMatch(/gbrain auth register-client/);
     expect(r.err.join('\n')).toContain('--bound-slug-prefixes');
-    expect(r.err.join('\n')).toContain('inbox/gbrain/*');
+    expect(r.err.join('\n')).toContain('inbox/gbrain-perplexity-a1b2c3d4/*');
   });
 
   test('read-only --oauth --register does not invent a write namespace', async () => {

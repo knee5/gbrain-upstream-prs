@@ -236,6 +236,27 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
       expect(narrower.dry_run).toBe(true);
     });
 
+    it('honors persisted legacy trailing-slash bindings for descendants', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['wiki/'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['wiki/team/page-1'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      const narrower = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['wiki/team/*'],
+      });
+      expect(narrower.dry_run).toBe(true);
+    });
+
     it('treats an exact binding as exact, not as a parent namespace', async () => {
       await seedClient('cursor', {
         bound_tools: ['put_page'],

@@ -28,6 +28,7 @@ import type { SearchResult } from './types.ts';
 import { CJK_SLUG_CHARS, PAGE_SLUG_SEG } from './cjk.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
+import { validateSlug } from './utils.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -171,18 +172,29 @@ export function validatePageSlug(slug: string): void {
  * Match a slug against a list of allow-list prefix globs.
  *
  * Glob form: `<prefix>/*` matches any slug starting with `<prefix>/` and
- * having at least one more segment (single or multi). Bare `<prefix>` (no
- * trailing `/*`) matches that exact slug only. The `*` is intentionally
- * permissive — depth is unbounded, so `wiki/originals/*` matches both
- * `wiki/originals/idea-x` and `wiki/originals/ideas/2026-04-25-idea-y`.
+ * having at least one more segment (single or multi). Persisted legacy
+ * `<prefix>/` grants retain the same descendant-only behavior. Bare
+ * `<prefix>` (no trailing slash or `/*`) matches that exact slug only. The
+ * `*` is intentionally permissive — depth is unbounded, so
+ * `wiki/originals/*` matches both `wiki/originals/idea-x` and
+ * `wiki/originals/ideas/2026-04-25-idea-y`.
  *
  * Used by the v0.23 dream-cycle trusted-workspace path. Order doesn't
  * matter; the first match wins (returns true on any match).
  */
+function slugNamespaceBase(grant: string): string | null {
+  if (grant.endsWith('/*')) return grant.slice(0, -2);
+  // Pre-boundary clients persisted namespace grants as `wiki/`. New
+  // registrations use the explicit `wiki/*` form, but existing rows must
+  // retain their descendant-only meaning until they are re-registered.
+  if (grant.endsWith('/')) return grant.slice(0, -1);
+  return null;
+}
+
 export function matchesSlugAllowList(slug: string, prefixes: readonly string[]): boolean {
   for (const p of prefixes) {
-    if (p.endsWith('/*')) {
-      const base = p.slice(0, -2);
+    const base = slugNamespaceBase(p);
+    if (base !== null) {
       if (slug === base) continue;
       if (slug.startsWith(base + '/')) return true;
     } else if (p === slug) {
@@ -196,21 +208,39 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
  * Return whether every slug admitted by one delegated allow-list entry is
  * also admitted by a registration-time binding.
  *
- * Exact entries contain only themselves. A trailing `/*` entry contains exact
- * descendants and narrower trailing-`/*` namespaces, but not its own base
- * slug. Keep this set-containment check separate from raw string prefixes:
+ * Exact entries contain only themselves. A trailing `/*` entry (or persisted
+ * legacy trailing `/` entry) contains exact descendants and narrower
+ * namespaces, but not its own base slug. Keep this set-containment check
+ * separate from raw string prefixes:
  * `inbox/client` must never contain the sibling namespace
  * `inbox/client-evil/*`.
  */
 export function isSlugGrantContained(requested: string, bound: string): boolean {
-  if (!requested.endsWith('/*')) {
+  const requestedBase = slugNamespaceBase(requested);
+  if (requestedBase === null) {
     return matchesSlugAllowList(requested, [bound]);
   }
-  if (!bound.endsWith('/*')) return false;
+  const boundBase = slugNamespaceBase(bound);
+  if (boundBase === null) return false;
 
-  const requestedBase = requested.slice(0, -2);
-  const boundBase = bound.slice(0, -2);
   return requestedBase === boundBase || requestedBase.startsWith(`${boundBase}/`);
+}
+
+/**
+ * Validate and canonicalize a caller-supplied operation slug before any
+ * authorization decision. Persisted OAuth grants are canonical lowercase;
+ * checking a mixed-case request first would incorrectly deny a write that the
+ * storage layer later lowercases into the granted namespace.
+ */
+function canonicalizeOperationSlug(slug: string, opName: string): string {
+  try {
+    return validateSlug(slug);
+  } catch (e) {
+    throw new OperationError(
+      'invalid_params',
+      `${opName} received an invalid slug: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 }
 
 /**
@@ -266,8 +296,9 @@ export function enforceOAuthWriteSlugForAuth(
   auth: AuthInfo,
   slug: string,
   opName: string,
-): void {
-  if (auth.scopes.includes('admin')) return;
+): string {
+  const canonicalSlug = canonicalizeOperationSlug(slug, opName);
+  if (auth.scopes.includes('admin')) return canonicalSlug;
   const allowList = auth.writeSlugPrefixes;
   if (!allowList || allowList.length === 0) {
     throw new OperationError(
@@ -276,21 +307,23 @@ export function enforceOAuthWriteSlugForAuth(
       'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
     );
   }
-  if (!matchesSlugAllowList(slug, allowList)) {
+  if (!matchesSlugAllowList(canonicalSlug, allowList)) {
     throw new OperationError(
       'permission_denied',
-      `${opName} slug '${slug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
+      `${opName} slug '${canonicalSlug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
       'Write under an allowed prefix or ask the operator to register a different namespace.',
     );
   }
+  return canonicalSlug;
 }
 
 export function enforceOAuthWriteSlugFence(
   ctx: OperationContext,
   slug: string,
   opName: string,
-): void {
-  if (ctx.remote === false || ctx.auth?.scopes.includes('admin')) return;
+): string {
+  const canonicalSlug = canonicalizeOperationSlug(slug, opName);
+  if (ctx.remote === false || ctx.auth?.scopes.includes('admin')) return canonicalSlug;
   // The local stdio MCP pipe and an explicitly marked subagent are the only
   // intentional auth-less remote paths. Re-run the subagent fence here rather
   // than assuming every caller already did so: add_tag, add_link,
@@ -299,10 +332,10 @@ export function enforceOAuthWriteSlugFence(
   // partial/forged viaSubagent context could turn those tools into
   // unrestricted writers.
   if (!ctx.auth) {
-    if (ctx.transport === 'stdio') return;
+    if (ctx.transport === 'stdio') return canonicalSlug;
     if (ctx.viaSubagent === true) {
-      enforceSubagentSlugFence(ctx, slug, opName);
-      return;
+      enforceSubagentSlugFence(ctx, canonicalSlug, opName);
+      return canonicalSlug;
     }
     throw new OperationError(
       'permission_denied',
@@ -310,7 +343,7 @@ export function enforceOAuthWriteSlugFence(
       'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
     );
   }
-  enforceOAuthWriteSlugForAuth(ctx.auth, slug, opName);
+  return enforceOAuthWriteSlugForAuth(ctx.auth, canonicalSlug, opName);
 }
 
 /**
@@ -966,7 +999,7 @@ const put_page: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    const slug = p.slug as string;
+    const slug = canonicalizeOperationSlug(p.slug as string, 'put_page');
 
     // v0.39.3.0 CV6 trust gate for provenance write-through (WARN-8).
     // Only trusted LOCAL callers (ctx.remote === false — capture CLI,
@@ -1005,7 +1038,7 @@ const put_page: Operation = {
     // Runs before dry-run so previews exercise the same authorization gate.
     enforceOAuthWriteSlugFence(ctx, slug, 'put_page');
 
-    if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug: p.slug };
+    if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug };
 
     // Empty-overwrite guard: empty/whitespace-only content over an existing
     // non-empty page is almost always an input-plumbing failure (e.g. a
@@ -2210,11 +2243,11 @@ const add_tag: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_tag');
-    if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug: p.slug, tag: p.tag };
+    const slug = enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_tag');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug, tag: p.tag };
     // v0.31.8 (D7): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.addTag(p.slug as string, p.tag as string, sourceOpts);
+    await ctx.engine.addTag(slug, p.tag as string, sourceOpts);
     return { status: 'ok' };
   },
   cliHints: { name: 'tag', positional: ['slug', 'tag'] },
@@ -2286,9 +2319,9 @@ const add_link: Operation = {
     // Both endpoints affect graph topology and ranking. A routine OAuth
     // writer must own both namespaces; fencing only `from` would let an
     // intake client poison arbitrary targets through backlinks.
-    enforceOAuthWriteSlugFence(ctx, p.from as string, 'add_link');
-    enforceOAuthWriteSlugFence(ctx, p.to as string, 'add_link');
-    if (ctx.dryRun) return { dry_run: true, action: 'add_link', from: p.from, to: p.to };
+    const from = enforceOAuthWriteSlugFence(ctx, p.from as string, 'add_link');
+    const to = enforceOAuthWriteSlugFence(ctx, p.to as string, 'add_link');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_link', from, to };
     // v114 (#1941): default omitted provenance to 'manual' (NOT the engine's
     // 'markdown' default) so hand/tool-created CLI edges are honestly manual,
     // and forbid forging the reconciliation-managed built-ins.
@@ -2306,7 +2339,7 @@ const add_link: Operation = {
       ? { fromSourceId: ctx.sourceId, toSourceId: ctx.sourceId, originSourceId: ctx.sourceId }
       : undefined;
     await ctx.engine.addLink( // gbrain-allow-direct-insert: add_link MCP op is the explicit canonical surface for manual link creation; auto-link reconciliation runs separately via auto_link post-hook
-      p.from as string, p.to as string,
+      from, to,
       (p.context as string) || '', (p.link_type as string) || '',
       linkSource, undefined, undefined,
       linkOpts,
@@ -2454,9 +2487,10 @@ const add_timeline_entry: Operation = {
     // subagent-allowlisted (brain-allowlist.ts), so timeline writes must be
     // confined to the same namespace/allow-list as page writes. Runs before
     // the dry-run short-circuit so preview calls surface the same rejection.
-    enforceSubagentSlugFence(ctx, p.slug as string, 'add_timeline_entry');
-    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_timeline_entry');
-    if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug: p.slug };
+    const slug = canonicalizeOperationSlug(p.slug as string, 'add_timeline_entry');
+    enforceSubagentSlugFence(ctx, slug, 'add_timeline_entry');
+    enforceOAuthWriteSlugFence(ctx, slug, 'add_timeline_entry');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug };
     const date = p.date as string;
     // Reject anything that isn't a strict YYYY-MM-DD with year 1900-2199 and
     // a real calendar day. PG DATE accepts year 5874897 silently — that's a
@@ -2475,7 +2509,7 @@ const add_timeline_entry: Operation = {
     }
     // v0.31.8 (D7): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.addTimelineEntry(p.slug as string, { // gbrain-allow-direct-insert: add_timeline_entry MCP op is the explicit canonical surface for manual timeline entries
+    await ctx.engine.addTimelineEntry(slug, { // gbrain-allow-direct-insert: add_timeline_entry MCP op is the explicit canonical surface for manual timeline entries
       date,
       source: (p.source as string) || '',
       summary: p.summary as string,
@@ -2905,11 +2939,11 @@ const put_raw_data: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'put_raw_data');
-    if (ctx.dryRun) return { dry_run: true, action: 'put_raw_data', slug: p.slug, source: p.source };
+    const slug = enforceOAuthWriteSlugFence(ctx, p.slug as string, 'put_raw_data');
+    if (ctx.dryRun) return { dry_run: true, action: 'put_raw_data', slug, source: p.source };
     // v0.31.8 (D7 + D21): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.putRawData(p.slug as string, p.source as string, p.data as object, sourceOpts);
+    await ctx.engine.putRawData(slug, p.source as string, p.data as object, sourceOpts);
     return { status: 'ok' };
   },
 };
@@ -2975,7 +3009,9 @@ const log_ingest: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    const pagesUpdated = p.pages_updated as string[];
+    const pagesUpdated = (p.pages_updated as string[]).map(
+      slug => canonicalizeOperationSlug(slug, 'log_ingest'),
+    );
     // Unlike a page-targeting op, an empty pages_updated array gives the
     // namespace fence no slug to validate. Do not let a routine remote OAuth
     // writer use that vacuous loop to append unscoped global audit records.
@@ -3006,7 +3042,7 @@ const log_ingest: Operation = {
     for (const slug of pagesUpdated) {
       enforceOAuthWriteSlugFence(ctx, slug, 'log_ingest');
     }
-    if (ctx.dryRun) return { dry_run: true, action: 'log_ingest' };
+    if (ctx.dryRun) return { dry_run: true, action: 'log_ingest', pages_updated: pagesUpdated };
     await ctx.engine.logIngest({
       // Thread ctx.sourceId (same pattern as get_chunks/get_page above): on a
       // multi-source brain the ingest event must be attributed to the caller's
@@ -3015,7 +3051,7 @@ const log_ingest: Operation = {
       ...(ctx.sourceId ? { source_id: ctx.sourceId } : {}),
       source_type: p.source_type as string,
       source_ref: p.source_ref as string,
-      pages_updated: p.pages_updated as string[],
+      pages_updated: pagesUpdated,
       summary: p.summary as string,
     });
     return { status: 'ok' };
@@ -5640,17 +5676,17 @@ const ontology_propose: Operation = {
     visibility: { type: 'string', enum: ['private', 'world'], description: 'Default private.' },
   },
   handler: async (ctx, p) => {
-    enforceOAuthWriteSlugFence(ctx, String(p.entity), 'ontology_propose');
+    const entity = enforceOAuthWriteSlugFence(ctx, String(p.entity), 'ontology_propose');
     if (ctx.dryRun) {
       return {
         dry_run: true,
         action: 'ontology_propose',
-        entity: p.entity,
+        entity,
         dimension: p.dimension,
       };
     }
     return ctx.engine.mergeOntologyFact({
-      entitySlug: String(p.entity),
+      entitySlug: entity,
       dimension: String(p.dimension),
       value: String(p.value),
       confidence: typeof p.confidence === 'number' ? p.confidence : undefined,

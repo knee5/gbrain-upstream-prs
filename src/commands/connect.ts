@@ -33,6 +33,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { randomBytes } from 'crypto';
 import type { ConnectProbeResult } from '../core/connect-probe.ts';
 import { probeBrainIdentity, DEFAULT_PROBE_TIMEOUT_MS } from '../core/connect-probe.ts';
 import { promptLine } from '../core/cli-util.ts';
@@ -117,7 +118,7 @@ Flags:
   --client-id <id>     With --oauth: use an existing OAuth client id
   --client-secret <s>  With --oauth: use an existing OAuth client secret
   --scopes "<s>"       With --oauth --register: client scopes (default: "${DEFAULT_SCOPES}")
-                       Non-admin writers get a validated inbox/<name>/* namespace.
+                       Non-admin writers get a unique inbox/<client-name>/* namespace.
   --install            Run the agent's MCP-add command, then smoke-test the token
                        (claude-code + codex only)
   --yes                Skip the install confirmation prompt
@@ -323,6 +324,26 @@ export function deriveOAuthWriteSlugPrefixes(
   return normalizeBoundSlugPrefixesInput(`inbox/${slugSegment}/*`);
 }
 
+/**
+ * Keep the MCP server's stable display name separate from the OAuth client's
+ * durable identity. Repeated connector registrations must not silently reuse
+ * the same `inbox/gbrain/*` write lane.
+ */
+function deriveOAuthRegistrationName(
+  serverName: string,
+  agent: AgentId,
+  suffix: string,
+): string {
+  if (!/^[a-z0-9]+$/.test(suffix)) {
+    throw new Error('OAuth client-name suffix must be lowercase alphanumeric.');
+  }
+  const name = `${serverName}-${agent}-${suffix}`;
+  if (!isValidName(name)) {
+    throw new Error(`Invalid generated OAuth client name '${name}'.`);
+  }
+  return name;
+}
+
 function claudeBlock(p: { name: string; url: string; token: string | null }): string {
   const headerToken = p.token ?? PLACEHOLDER_TOKEN;
   const cmd = cmdString('claude', buildClaudeMcpAddArgv({ name: p.name, url: p.url, headerToken }));
@@ -522,6 +543,7 @@ export interface ConnectDeps {
   probe(url: string, token: string, timeoutMs: number): Promise<ConnectProbeResult>;
   env(name: string): string | undefined;
   registerOAuthClient(name: string, scopes: string, writeSlugPrefixes?: string[]): RegisterResult;
+  oauthClientNameSuffix?(): string;
 }
 
 async function defaultPromptYesNo(question: string): Promise<boolean> {
@@ -595,6 +617,7 @@ const defaultDeps: ConnectDeps = {
   probe: (url, token, timeoutMs) => probeBrainIdentity(url, token, { timeoutMs }),
   env: (name) => process.env[name],
   registerOAuthClient: defaultRegisterOAuthClient,
+  oauthClientNameSuffix: () => randomBytes(8).toString('hex'),
 };
 
 // ---------------------------------------------------------------------------
@@ -703,13 +726,18 @@ function resolveOAuthCreds(f: ParsedFlags, url: string, deps: ConnectDeps): OAut
   if (f.clientId || f.clientSecret) {
     fail('--oauth needs BOTH --client-id and --client-secret (or use --register to mint a client).');
   }
-  const writeSlugPrefixes = deriveOAuthWriteSlugPrefixes(f.name, f.scopes);
+  const registrationName = deriveOAuthRegistrationName(
+    f.name,
+    f.agent,
+    deps.oauthClientNameSuffix?.() ?? randomBytes(8).toString('hex'),
+  );
+  const writeSlugPrefixes = deriveOAuthWriteSlugPrefixes(registrationName, f.scopes);
   const manualRegisterCommand = cmdString(
     'gbrain',
-    buildRegisterOAuthClientArgv(f.name, f.scopes, writeSlugPrefixes),
+    buildRegisterOAuthClientArgv(registrationName, f.scopes, writeSlugPrefixes),
   );
   if (f.register) {
-    const r = deps.registerOAuthClient(f.name, f.scopes, writeSlugPrefixes);
+    const r = deps.registerOAuthClient(registrationName, f.scopes, writeSlugPrefixes);
     if (!r.ok) {
       fail(`Could not register an OAuth client (run this on the brain host where the DB lives): ${r.message}\n` +
         `Or mint one manually: ${manualRegisterCommand}`);
