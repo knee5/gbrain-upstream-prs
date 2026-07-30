@@ -613,12 +613,23 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
         WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
       `;
     } catch (err) {
-      // v0.34.1: pre-v60 brain → source_id column missing. Pre-v61 brain →
-      // federated_read column missing. Both classes degrade to legacy
-      // projection so auth keeps working until the operator runs
-      // apply-migrations. Probe both column names so partial-upgrade brains
-      // (v60 applied but v61 didn't yet) also fall through cleanly.
-      if (isUndefinedColumnError(err, 'bound_slug_prefixes')) {
+      // Compatibility ladder for successively older OAuth schemas:
+      //   current → pre-binding → v60-only → pre-v60.
+      //
+      // Postgres reports SQLSTATE 42703 for the first missing column, and
+      // isUndefinedColumnError deliberately treats that code as authoritative.
+      // Therefore each narrower projection must live inside the same retry
+      // ladder: a pre-v60 brain may first report source_id missing even though
+      // bound_slug_prefixes is also absent.
+      if (
+        !isUndefinedColumnError(err, 'bound_slug_prefixes')
+        && !isUndefinedColumnError(err, 'federated_read')
+        && !isUndefinedColumnError(err, 'source_id')
+      ) {
+        throw err;
+      }
+
+      try {
         // Pre-binding schema: reads and identity continue to work, but
         // writeSlugPrefixes stays undefined so routine slug-targeting writes
         // fail closed for non-admin OAuth callers.
@@ -629,30 +640,34 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
           LEFT JOIN oauth_clients c ON c.client_id = t.client_id
           WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
         `;
-      } else if (isUndefinedColumnError(err, 'source_id') || isUndefinedColumnError(err, 'federated_read')) {
-        // Try the v60-only projection first (source_id but no federated_read).
+      } catch (err2) {
+        if (
+          !isUndefinedColumnError(err2, 'federated_read')
+          && !isUndefinedColumnError(err2, 'source_id')
+        ) {
+          throw err2;
+        }
+
         try {
+          // v60-only projection: source_id exists, federated_read does not.
           oauthRows = await this.sql`
             SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name, c.source_id
             FROM oauth_tokens t
             LEFT JOIN oauth_clients c ON c.client_id = t.client_id
             WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
           `;
-        } catch (err2) {
-          if (isUndefinedColumnError(err2, 'source_id')) {
-            // Truly pre-v60: no source_id either. Pre-v0.34 projection.
-            oauthRows = await this.sql`
-              SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name
-              FROM oauth_tokens t
-              LEFT JOIN oauth_clients c ON c.client_id = t.client_id
-              WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
-            `;
-          } else {
-            throw err2;
+        } catch (err3) {
+          if (!isUndefinedColumnError(err3, 'source_id')) {
+            throw err3;
           }
+          // Truly pre-v60: no source_id either. Pre-v0.34 projection.
+          oauthRows = await this.sql`
+            SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name
+            FROM oauth_tokens t
+            LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+            WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
+          `;
         }
-      } else {
-        throw err;
       }
     }
 

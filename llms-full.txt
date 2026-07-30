@@ -3754,8 +3754,8 @@ Register clients from the **`/admin` dashboard**:
 
 1. Click **Register client**.
 2. Enter a name (e.g. `perplexity`, `chatgpt`).
-3. Pick scopes: `read`, `write`, `admin` (checkboxes). If you select `write`,
-   enter at least one explicit slug-prefix grant, such as
+3. Pick scopes: `read`, `write`, `admin` (checkboxes). For non-admin clients
+   selecting `write`, enter at least one explicit slug-prefix grant, such as
    `inbox/perplexity/*`; unbound routine writes fail closed.
 4. Pick grant type: `client_credentials` for machine-to-machine (Perplexity,
    Claude Desktop bearer mode) or `authorization_code` for browser-based
@@ -3858,6 +3858,12 @@ the source's Markdown facts fence. It must remain a local operator action until
 that mirror path is redesigned as remote-safe DB-only behavior. A write token
 never inherits deletion, rollback, or fact-forgetting authority.
 
+> **Upgrading existing OAuth connectors:** `delete_page`, `restore_page`,
+> `remove_tag`, `remove_link`, `revert_version`, and `extract_facts` now require
+> `admin`. Revoke and re-register any connector that previously called these
+> tools with only `read write`; do not add `admin` unless that connector should
+> have destructive, rollback, and uncontrolled-output authority.
+
 ## Legacy Bearer Token Setup
 
 Keep using pre-v0.26 bearer tokens if you aren't ready to migrate. They
@@ -3908,15 +3914,10 @@ gbrain auth test \
 
 ## Operations
 
-All 30 GBrain operations are available remotely, including `sync_brain` and
-`file_upload` (no timeout limits with self-hosted server).
-
-**Security note on `file_upload`:** remote MCP callers are confined to the working
-directory where `gbrain serve` was launched. Symlinks, `..` traversal, and absolute
-paths outside cwd are rejected. Page slugs and filenames are allowlist-validated
-(alphanumeric + hyphens; no control chars, RTL overrides, or backslashes). Local
-CLI callers (`gbrain file upload ...`) keep unrestricted filesystem access since
-the user owns the machine.
+Only operations not marked `localOnly` are available remotely over HTTP.
+Host-local operations such as `sync_brain` and `file_upload` are rejected
+regardless of OAuth scope and remain available only through trusted local
+transports.
 
 ## Deployment Options
 

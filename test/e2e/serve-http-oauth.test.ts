@@ -362,6 +362,19 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     expect(identityBody).toContain('write_slug_prefixes');
     expect(identityBody).toContain('inbox/e2e-oauth/*');
 
+    const inside = await mcpCall(access_token, 'tools/call', {
+      name: 'put_page',
+      arguments: {
+        slug: 'inbox/e2e-oauth/allowed',
+        content: '---\ntitle: OAuth fence allowed path\n---\n\nThis write must succeed.',
+      },
+    });
+    const insideBody = await inside.text();
+    expect(inside.status).not.toBe(401);
+    expect(inside.status).not.toBe(403);
+    expect(insideBody).not.toContain('permission_denied');
+    expect(insideBody).toContain('inbox/e2e-oauth/allowed');
+
     const outside = await mcpCall(access_token, 'tools/call', {
       name: 'put_page',
       arguments: {

@@ -1076,9 +1076,7 @@ const put_page: Operation = {
     let writeThrough: { written: boolean; path?: string; skipped?: string; error?: string } | undefined;
     const isSandboxSubagent = ctx.viaSubagent === true
       && !(Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0);
-    if (ctx.dryRun) {
-      writeThrough = { written: false, skipped: 'dry_run' };
-    } else if (result.status !== 'error' && ctx.remote !== false) {
+    if (result.status !== 'error' && ctx.remote !== false) {
       // Fail closed: a missing/undefined trust bit (possible only via a cast)
       // is remote too. Do not dereference DB-supplied filesystem paths from an
       // agent-facing transport.
@@ -1092,9 +1090,6 @@ const put_page: Operation = {
       // atomically; never throws (failures land in skipped/error).
       writeThrough = await writePageThrough(ctx.engine, result.slug, {
         sourceId,
-        frontmatterOverrides: {
-          ingested_at: new Date().toISOString(),
-        },
         logger: ctx.logger,
       });
     }

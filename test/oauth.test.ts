@@ -307,6 +307,33 @@ describe('client credentials', () => {
 // ---------------------------------------------------------------------------
 
 describe('verifyAccessToken', () => {
+  function projectionSql(missingColumns: ReadonlySet<string>) {
+    const queries: string[] = [];
+    const sqlMock = async (strings: TemplateStringsArray, ..._values: unknown[]) => {
+      const query = strings.join('$');
+      queries.push(query);
+      if (!query.includes('FROM oauth_tokens')) return [];
+
+      for (const column of ['source_id', 'federated_read', 'bound_slug_prefixes']) {
+        if (query.includes(`c.${column}`) && missingColumns.has(column)) {
+          throw Object.assign(new Error(`column c.${column} does not exist`), { code: '42703' });
+        }
+      }
+
+      return [{
+        client_id: 'legacy-schema-client',
+        client_name: 'legacy schema client',
+        scopes: ['read', 'write'],
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+        resource: null,
+        ...(query.includes('c.source_id') ? { source_id: 'default' } : {}),
+        ...(query.includes('c.federated_read') ? { federated_read: ['default', 'shared'] } : {}),
+        ...(query.includes('c.bound_slug_prefixes') ? { bound_slug_prefixes: ['inbox/test/'] } : {}),
+      }];
+    };
+    return { queries, sqlMock };
+  }
+
   test('valid token returns auth info', async () => {
     const { clientId, clientSecret } = await provider.registerClientManual(
       'verify-test', ['client_credentials'], 'read write',
@@ -317,6 +344,43 @@ describe('verifyAccessToken', () => {
     expect(authInfo.clientId).toBe(clientId);
     expect(authInfo.scopes).toContain('read');
     expect(authInfo.token).toBe(tokens.access_token);
+  });
+
+  test('pre-binding schema preserves source grants and leaves routine writes fail-closed', async () => {
+    const { queries, sqlMock } = projectionSql(new Set(['bound_slug_prefixes']));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-binding-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(2);
+    expect(authInfo.sourceId).toBe('default');
+    expect(authInfo.allowedSources).toEqual(['default', 'shared']);
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
+  });
+
+  test('pre-v61 schema falls through to the source-only projection', async () => {
+    const { queries, sqlMock } = projectionSql(new Set(['federated_read', 'bound_slug_prefixes']));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-v61-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(3);
+    expect(authInfo.sourceId).toBe('default');
+    expect(authInfo.allowedSources).toBeUndefined();
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
+  });
+
+  test('pre-v60 schema reaches the projection without source columns', async () => {
+    const { queries, sqlMock } = projectionSql(new Set([
+      'source_id',
+      'federated_read',
+      'bound_slug_prefixes',
+    ]));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-v60-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(4);
+    expect(authInfo.sourceId).toBeUndefined();
+    expect(authInfo.allowedSources).toBeUndefined();
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
   });
 
   test('expired token is rejected', async () => {
