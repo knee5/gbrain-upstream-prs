@@ -2969,10 +2969,35 @@ const log_ingest: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    const pagesUpdated = p.pages_updated as string[];
+    // Unlike a page-targeting op, an empty pages_updated array gives the
+    // namespace fence no slug to validate. Do not let a routine remote OAuth
+    // writer use that vacuous loop to append unscoped global audit records.
+    // Admin and trusted-local callers retain the historical empty-log escape
+    // hatch for operator bookkeeping.
+    if (
+      ctx.remote !== false
+      && ctx.auth
+      && !ctx.auth.scopes.includes('admin')
+      && pagesUpdated.length === 0
+    ) {
+      if (!ctx.auth.writeSlugPrefixes || ctx.auth.writeSlugPrefixes.length === 0) {
+        throw new OperationError(
+          'permission_denied',
+          'log_ingest requires an OAuth write namespace; this client has no bound_slug_prefixes.',
+          'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
+        );
+      }
+      throw new OperationError(
+        'invalid_params',
+        'log_ingest requires at least one pages_updated slug for a routine remote OAuth writer.',
+        'Name at least one page inside the client write namespace.',
+      );
+    }
     // pages_updated is part of the durable ingestion audit trail. Fence every
     // referenced page so a namespace-bound client cannot claim arbitrary
     // pages were updated.
-    for (const slug of p.pages_updated as string[]) {
+    for (const slug of pagesUpdated) {
       enforceOAuthWriteSlugFence(ctx, slug, 'log_ingest');
     }
     if (ctx.dryRun) return { dry_run: true, action: 'log_ingest' };

@@ -406,4 +406,58 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
       code: 'permission_denied',
     });
   });
+
+  test('log_ingest rejects an empty page list for a bound routine OAuth writer', async () => {
+    await expect(findOp('log_ingest').handler(
+      oauthCtx(['inbox/chatgpt/*']),
+      {
+        source_type: 'chatgpt',
+        source_ref: 'conversation-empty',
+        pages_updated: [],
+        summary: 'Must not create an unscoped audit row',
+      },
+    )).rejects.toMatchObject({
+      code: 'invalid_params',
+    });
+  });
+
+  test('log_ingest fails closed on an empty page list when the OAuth namespace is absent', async () => {
+    await expect(findOp('log_ingest').handler(
+      oauthCtx(undefined),
+      {
+        source_type: 'chatgpt',
+        source_ref: 'conversation-empty',
+        pages_updated: [],
+        summary: 'Must not bypass the missing binding',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
+  test('log_ingest preserves empty operator bookkeeping for admin and trusted local callers', async () => {
+    const params = {
+      source_type: 'operator',
+      source_ref: 'bookkeeping',
+      pages_updated: [],
+      summary: 'No page mutation',
+    };
+    const admin = await findOp('log_ingest').handler(
+      oauthCtx(undefined, ['admin']),
+      params,
+    ) as { dry_run?: boolean };
+    expect(admin.dry_run).toBe(true);
+
+    const local = await findOp('log_ingest').handler(
+      makeCtx({
+        remote: false,
+        dryRun: true,
+        viaSubagent: false,
+        subagentId: undefined,
+        auth: undefined,
+      }),
+      params,
+    ) as { dry_run?: boolean };
+    expect(local.dry_run).toBe(true);
+  });
 });
