@@ -23,7 +23,10 @@ export const backLinkValidator: PageValidator = {
 
   async validate(ctx: PageValidationContext): Promise<ValidationFinding[]> {
     const findings: ValidationFinding[] = [];
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : undefined;
+    // A scalar source context can validate only same-source graph endpoints.
+    // Using sourceIds constrains both the from and to pages; sourceId alone
+    // constrains only the origin and would misread cross-source targets.
+    const sourceOpts = ctx.sourceId ? { sourceIds: [ctx.sourceId] } : undefined;
 
     const outbound = await ctx.engine.getLinks(ctx.slug, sourceOpts);
     if (outbound.length === 0) return findings;

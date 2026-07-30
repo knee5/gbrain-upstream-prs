@@ -721,6 +721,19 @@ describe('back-link validator', () => {
       undefined,
       scopedLinkOpts,
     );
+    await engine.addLink(
+      'people/a',
+      'people/c',
+      'cross-source',
+      'mentions',
+      'manual',
+      undefined,
+      undefined,
+      {
+        fromSourceId: 'validator-source',
+        toSourceId: 'default',
+      },
+    );
 
     const findings = await backLinkValidator.validate({
       slug: 'people/a',
