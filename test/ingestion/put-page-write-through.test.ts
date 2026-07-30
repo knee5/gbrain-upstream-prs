@@ -152,6 +152,62 @@ describe('put_page write-through — happy path', () => {
     expect(page?.source_kind).toBe('mcp:put_page');
     expect(page?.ingested_via).toBe('mcp:put_page');
   });
+
+  test('OAuth lint stays source-scoped and DB-only when lint_on_put_page is enabled', async () => {
+    await engine.executeRaw(
+      "INSERT INTO sources (id, name) VALUES ('remote-lint-source', 'remote-lint-source')",
+    );
+    await engine.setConfig('writer.lint_on_put_page', 'true');
+    // A same-slug default page is grandfathered. If post-write lint drops the
+    // OAuth source scope, it will inspect this row and report "skipped"
+    // instead of validating the newly written non-default page.
+    await engine.putPage('remote-lint/page', {
+      type: 'person',
+      title: 'Default',
+      compiled_truth: 'Default source control row.',
+      frontmatter: { validate: false },
+    });
+
+    const priorHome = process.env.GBRAIN_HOME;
+    process.env.GBRAIN_HOME = tmpRoot;
+    let result: {
+      writer_lint?: { error_count?: number; warning_count?: number; skipped?: string };
+      write_through?: { written: boolean; skipped?: string };
+    };
+    try {
+      result = (await putPage.handler(makeCtx({
+        remote: true,
+        sourceId: 'remote-lint-source',
+        auth: {
+          token: 'test-token',
+          clientId: 'remote-lint-client',
+          scopes: ['read', 'write'],
+          sourceId: 'remote-lint-source',
+          writeSlugPrefixes: ['remote-lint/*'],
+        },
+      }), {
+        slug: 'remote-lint/page',
+        content: '---\ntitle: Remote lint\n---\n\nRemote raised $5M in Series A from Sequoia without citation.',
+      })) as typeof result;
+    } finally {
+      if (priorHome === undefined) delete process.env.GBRAIN_HOME;
+      else process.env.GBRAIN_HOME = priorHome;
+    }
+
+    expect(result!.writer_lint?.skipped).toBeUndefined();
+    expect((result!.writer_lint?.error_count ?? 0) + (result!.writer_lint?.warning_count ?? 0))
+      .toBeGreaterThan(0);
+    expect(result!.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(tmpRoot, '.gbrain', 'validator-lint.jsonl'))).toBe(false);
+
+    const audits = await engine.executeRaw<{ source_id: string }>(
+      `SELECT source_id
+       FROM ingest_log
+       WHERE source_type = 'writer_lint' AND source_ref = 'remote-lint/page'`,
+    );
+    expect(audits).toEqual([{ source_id: 'remote-lint-source' }]);
+    expect(await engine.getPage('remote-lint/page', { sourceId: 'remote-lint-source' })).not.toBeNull();
+  });
 });
 
 describe('put_page write-through — trust gating', () => {

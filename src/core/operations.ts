@@ -1309,7 +1309,13 @@ const put_page: Operation = {
     let writerLint: { error_count: number; warning_count: number } | { skipped: string } | undefined;
     try {
       const { runPostWriteLint } = await import('./output/post-write.ts');
-      const lint = await runPostWriteLint(ctx.engine, result.slug);
+      const lint = await runPostWriteLint(ctx.engine, result.slug, {
+        ...(ctx.sourceId ? { sourceId: ctx.sourceId } : {}),
+        // Remote writes are durable in the database only. Keep the lint audit
+        // in the caller's source, but never let a network request append to a
+        // host-local JSONL file.
+        noLocalLog: ctx.remote !== false,
+      });
       if (lint.ran) {
         writerLint = {
           error_count: lint.findings.filter(f => f.severity === 'error').length,
