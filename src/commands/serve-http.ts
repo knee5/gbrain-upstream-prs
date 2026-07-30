@@ -192,6 +192,35 @@ export function resolveOAuthIngestSlug(
   return slug;
 }
 
+/**
+ * Build the queue payload for an OAuth-authenticated POST /ingest request.
+ *
+ * `event.source_id` is caller-controlled provenance (X-Gbrain-Source-Id) and
+ * MUST NOT select the database source that receives the page. The write target
+ * comes exclusively from the source grant resolved during bearer-token
+ * verification. Keeping it as a separate, server-stamped job field lets the
+ * asynchronous worker preserve the authenticated source boundary after the
+ * HTTP request has ended.
+ *
+ * Undefined source grants are legacy/default clients. This matches the HTTP
+ * MCP dispatch path, which maps those clients to the built-in `default` source.
+ */
+export function buildOAuthIngestCaptureJobData(
+  authInfo: AuthInfo,
+  event: IngestionEvent,
+  slug: string,
+): {
+  event: IngestionEvent;
+  slug: string;
+  target_source_id: string;
+} {
+  return {
+    event,
+    slug,
+    target_source_id: authInfo.sourceId ?? 'default',
+  };
+}
+
 export type ProbeHealthResult =
   | { ok: true; status: 200; body: { status: 'ok'; version: string; engine: string; [k: string]: unknown } }
   | { ok: false; status: 503; body: { error: 'service_unavailable'; error_description: string } };
@@ -2268,18 +2297,20 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       }
 
       try {
+        const jobData = buildOAuthIngestCaptureJobData(authInfo, event, resolvedSlug);
         const job = await ingestQueue.add(
           'ingest_capture',
-          {
-            event,
-            slug: resolvedSlug,
-          },
+          jobData,
           {
             // Idempotency: same content from the same client within the
             // queue's lifetime is a single job. Different content gets
-            // different jobs. Daemon-side dedup catches the 24h window;
+            // different jobs. Include the authenticated target source so a
+            // later client rescope cannot dedup against a job accepted under
+            // the client's former source grant. Daemon-side dedup catches the
+            // 24h window;
             // the queue-level idempotency catches simultaneous retries.
-            idempotency_key: `ingest:webhook:${authInfo.clientId}:${contentHash}`,
+            idempotency_key:
+              `ingest:webhook:${authInfo.clientId}:${jobData.target_source_id}:${contentHash}`,
             // Cap waiting jobs from a single client so a runaway integration
             // can't fill the queue.
             maxWaiting: 50,
@@ -2310,6 +2341,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           content_hash: contentHash,
           slug: resolvedSlug,
           source_id: sourceId,
+          target_source_id: jobData.target_source_id,
           message: 'Accepted. Event queued for ingestion.',
         });
       } catch (err) {

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveOAuthIngestSlug } from '../src/commands/serve-http.ts';
+import {
+  buildOAuthIngestCaptureJobData,
+  resolveOAuthIngestSlug,
+} from '../src/commands/serve-http.ts';
 import type { AuthInfo } from '../src/core/operations.ts';
+import type { IngestionEvent } from '../src/core/ingestion/types.ts';
 
 const HASH = 'abcdef0123456789';
 const NOW = new Date('2026-07-30T12:34:56Z');
@@ -91,5 +95,37 @@ describe('resolveOAuthIngestSlug', () => {
       HASH,
       NOW,
     )).toBe('inbox/2026-07-30-abcdef');
+  });
+});
+
+describe('buildOAuthIngestCaptureJobData', () => {
+  const event = {
+    source_id: 'caller-controlled-header',
+    source_kind: 'webhook',
+    source_uri: 'https://example.com/source',
+    received_at: NOW.toISOString(),
+    content_type: 'text/markdown',
+    content: '# capture',
+    content_hash: HASH.padEnd(64, '0'),
+    untrusted_payload: true,
+  } satisfies IngestionEvent;
+
+  test('stamps the authenticated non-default source, not event.source_id', () => {
+    const data = buildOAuthIngestCaptureJobData(
+      auth({ sourceId: 'chatgpt-mobile' }),
+      event,
+      'inbox/test-client/capture',
+    );
+    expect(data.target_source_id).toBe('chatgpt-mobile');
+    expect(data.event.source_id).toBe('caller-controlled-header');
+  });
+
+  test('legacy/default OAuth clients are stamped to the default source', () => {
+    const data = buildOAuthIngestCaptureJobData(
+      auth({ sourceId: undefined }),
+      event,
+      'inbox/test-client/capture',
+    );
+    expect(data.target_source_id).toBe('default');
   });
 });
