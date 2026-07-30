@@ -15,6 +15,7 @@ import { join } from 'path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { runPostWriteLint, isLintOnPutPageEnabled } from '../src/core/output/post-write.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: BrainEngine;
 let dbDir: string;
@@ -40,13 +41,9 @@ async function withTempGbrainHome<T>(
   fn: (root: string) => Promise<T>,
 ): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'postwrite-home-'));
-  const prior = process.env.GBRAIN_HOME;
-  process.env.GBRAIN_HOME = root;
   try {
-    return await fn(root);
+    return await withEnv({ GBRAIN_HOME: root }, () => fn(root));
   } finally {
-    if (prior === undefined) delete process.env.GBRAIN_HOME;
-    else process.env.GBRAIN_HOME = prior;
     rmSync(root, { recursive: true, force: true });
   }
 }

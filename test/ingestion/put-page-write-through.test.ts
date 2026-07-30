@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
+import { withEnv } from '../helpers/with-env.ts';
 import { operations } from '../../src/core/operations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
 import { resetGateway } from '../../src/core/ai/gateway.ts';
@@ -168,14 +169,8 @@ describe('put_page write-through — happy path', () => {
       frontmatter: { validate: false },
     });
 
-    const priorHome = process.env.GBRAIN_HOME;
-    process.env.GBRAIN_HOME = tmpRoot;
-    let result: {
-      writer_lint?: { error_count?: number; warning_count?: number; skipped?: string };
-      write_through?: { written: boolean; skipped?: string };
-    };
-    try {
-      result = (await putPage.handler(makeCtx({
+    const result = await withEnv({ GBRAIN_HOME: tmpRoot }, async () => (
+      await putPage.handler(makeCtx({
         remote: true,
         sourceId: 'remote-lint-source',
         auth: {
@@ -188,16 +183,16 @@ describe('put_page write-through — happy path', () => {
       }), {
         slug: 'remote-lint/page',
         content: '---\ntitle: Remote lint\n---\n\nRemote raised $5M in Series A from Sequoia without citation.',
-      })) as typeof result;
-    } finally {
-      if (priorHome === undefined) delete process.env.GBRAIN_HOME;
-      else process.env.GBRAIN_HOME = priorHome;
-    }
+      })
+    )) as {
+      writer_lint?: { error_count?: number; warning_count?: number; skipped?: string };
+      write_through?: { written: boolean; skipped?: string };
+    };
 
-    expect(result!.writer_lint?.skipped).toBeUndefined();
-    expect((result!.writer_lint?.error_count ?? 0) + (result!.writer_lint?.warning_count ?? 0))
+    expect(result.writer_lint?.skipped).toBeUndefined();
+    expect((result.writer_lint?.error_count ?? 0) + (result.writer_lint?.warning_count ?? 0))
       .toBeGreaterThan(0);
-    expect(result!.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
     expect(fs.existsSync(path.join(tmpRoot, '.gbrain', 'validator-lint.jsonl'))).toBe(false);
 
     const audits = await engine.executeRaw<{ source_id: string }>(
