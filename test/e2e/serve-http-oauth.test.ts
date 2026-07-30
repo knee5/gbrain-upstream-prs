@@ -441,6 +441,26 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     expect(adminNames.has('purge_deleted_pages')).toBe(false);
   }, 15_000);
 
+  test('HTTP callers cannot invoke fact mutations outside their transport policy', async () => {
+    const writeToken = (await mintToken('write')).access_token;
+    const extract = await mcpCall(writeToken, 'tools/call', {
+      name: 'extract_facts',
+      arguments: { turn_text: 'This must not reach the model-backed extractor.' },
+    });
+    const extractBody = await extract.text();
+    expect(extractBody).toContain('insufficient_scope');
+    expect(extractBody).toContain("requires 'admin'");
+
+    const adminToken = (await mintToken('admin')).access_token;
+    const forget = await mcpCall(adminToken, 'tools/call', {
+      name: 'forget_fact',
+      arguments: { id: 1 },
+    });
+    const forgetBody = await forget.text();
+    expect(forgetBody).toContain('unknown_operation');
+    expect(forgetBody).toContain('forget_fact');
+  }, 15_000);
+
   test('read-token catalog carries complete MCP annotations', async () => {
     const tools = await listTools((await mintToken('read')).access_token);
     expect(tools.length).toBeGreaterThan(0);
