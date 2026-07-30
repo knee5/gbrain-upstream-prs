@@ -28,7 +28,12 @@ import { operations, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
-import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
+import {
+  hasScope,
+  ALLOWED_SCOPES_LIST,
+  normalizeBoundSlugPrefixesInput,
+  normalizeScopesInput,
+} from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
 import { buildToolDefs, filterOperationsForScopes } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
@@ -1511,6 +1516,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       // missing, empty) and rejects the rest with a structured 400.
       const { name, tokenTtl, grantTypes, redirectUris, tokenEndpointAuthMethod } = req.body;
       const rawScopes = (req.body as Record<string, unknown>).scopes ?? (req.body as Record<string, unknown>).scope;
+      const rawBoundSlugPrefixes =
+        (req.body as Record<string, unknown>).boundSlugPrefixes
+        ?? (req.body as Record<string, unknown>).bound_slug_prefixes;
       if (!name) { res.status(400).json({ error: 'Name required' }); return; }
       let scopeString: string;
       try {
@@ -1519,6 +1527,31 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         res.status(400).json({
           error: 'invalid_scopes',
           message: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      let boundSlugPrefixes: string[];
+      try {
+        boundSlugPrefixes = normalizeBoundSlugPrefixesInput(rawBoundSlugPrefixes);
+      } catch (e) {
+        res.status(400).json({
+          error: 'invalid_bound_slug_prefixes',
+          message: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      // Routine OAuth writers fail closed at operation time when they have no
+      // namespace. Refuse to mint an immediately unusable dashboard client:
+      // admin remains the explicit operator escape hatch.
+      const selectedScopes = new Set(scopeString.split(' ').filter(Boolean));
+      if (
+        selectedScopes.has('write')
+        && !selectedScopes.has('admin')
+        && boundSlugPrefixes.length === 0
+      ) {
+        res.status(400).json({
+          error: 'bound_slug_prefixes_required',
+          message: 'Non-admin OAuth clients with write scope require at least one write slug prefix.',
         });
         return;
       }
@@ -1542,13 +1575,24 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         return;
       }
       const result = await oauthProvider.registerClientManual(
-        name, grants, scopeString, uris, 'default', undefined, validatedAuthMethod,
+        name,
+        grants,
+        scopeString,
+        uris,
+        'default',
+        undefined,
+        validatedAuthMethod,
+        boundSlugPrefixes.length > 0 ? { boundSlugPrefixes } : undefined,
       );
       // Set per-client TTL if specified
       if (tokenTtl && Number(tokenTtl) > 0) {
         await sql`UPDATE oauth_clients SET token_ttl = ${Number(tokenTtl)} WHERE client_id = ${result.clientId}`;
       }
-      res.json({ ...result, tokenTtl: tokenTtl ? Number(tokenTtl) : null });
+      res.json({
+        ...result,
+        tokenTtl: tokenTtl ? Number(tokenTtl) : null,
+        boundSlugPrefixes,
+      });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Registration failed' });
     }

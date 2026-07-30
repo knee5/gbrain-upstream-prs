@@ -121,16 +121,33 @@ describe('put_page write-through — happy path', () => {
     expect(page?.source_uri).toBe('file:///tmp/example-note.md');
   });
 
-  test('MCP/remote callers persist provenance to DB but skip filesystem write-through', async () => {
-    const ctx = makeCtx({ remote: true });
+  test('OAuth/remote callers stay DB-only: no fact side writes or filesystem write-through', async () => {
+    const ctx = makeCtx({
+      remote: true,
+      auth: {
+        token: 'test-token',
+        clientId: 'remote-write-client',
+        scopes: ['read', 'write'],
+        sourceId: 'default',
+        writeSlugPrefixes: ['inbox/mcp-prov/*'],
+      },
+    });
+    const factsBefore = await engine.executeRaw<{ n: number }>('SELECT COUNT(*) AS n FROM facts');
     const result = (await putPage.handler(ctx, {
-      slug: 'inbox/mcp-prov',
-      content: '---\ntitle: Q\n---\n\nbody',
-    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
+      slug: 'inbox/mcp-prov/page',
+      content: `---\ntitle: Q\n---\n\n${'This substantive remote page names people/arbitrary-target and contains facts. '.repeat(12)}`,
+    })) as {
+      facts_backstop?: { queued?: boolean; skipped?: string };
+      write_through?: { written: boolean; path?: string; skipped?: string };
+    };
+    expect(result.facts_backstop).toEqual({ skipped: 'remote' });
     expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
-    expect(fs.existsSync(path.join(brainDir, 'inbox/mcp-prov.md'))).toBe(false);
+    expect(fs.existsSync(path.join(brainDir, 'inbox/mcp-prov/page.md'))).toBe(false);
 
-    const page = await engine.getPage('inbox/mcp-prov');
+    const factsAfter = await engine.executeRaw<{ n: number }>('SELECT COUNT(*) AS n FROM facts');
+    expect(Number(factsAfter[0]?.n ?? 0)).toBe(Number(factsBefore[0]?.n ?? 0));
+
+    const page = await engine.getPage('inbox/mcp-prov/page');
     expect(page).not.toBeNull();
     expect(page?.source_kind).toBe('mcp:put_page');
     expect(page?.ingested_via).toBe('mcp:put_page');

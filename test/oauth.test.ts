@@ -172,6 +172,32 @@ describe('client registration', () => {
     const authInfo = await provider.verifyAccessToken(tokens.access_token) as CoreAuthInfo;
     expect(authInfo.writeSlugPrefixes).toEqual(['wiki/agents/bound-agent/']);
   });
+
+  test('registerClientManual persists a routine-write namespace without agent bindings', async () => {
+    const { clientId, clientSecret } = await provider.registerClientManual(
+      'dashboard-write-client',
+      ['client_credentials'],
+      'read write',
+      [],
+      'default',
+      undefined,
+      undefined,
+      { boundSlugPrefixes: ['inbox/dashboard/*'] },
+    );
+
+    const rows = await sql`
+      SELECT bound_slug_prefixes FROM oauth_clients WHERE client_id = ${clientId}
+    `;
+    expect(rows[0].bound_slug_prefixes).toEqual(['inbox/dashboard/*']);
+
+    const tokens = await provider.exchangeClientCredentials(
+      clientId,
+      clientSecret!,
+      'read write',
+    );
+    const authInfo = await provider.verifyAccessToken(tokens.access_token) as CoreAuthInfo;
+    expect(authInfo.writeSlugPrefixes).toEqual(['inbox/dashboard/*']);
+  });
 });
 
 // ---------------------------------------------------------------------------

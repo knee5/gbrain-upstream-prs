@@ -141,6 +141,27 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     });
   }
 
+  function parseMcpEnvelope(raw: string): any {
+    const jsonText = raw.trim().startsWith('{')
+      ? raw.trim()
+      : raw
+          .split(/\r?\n/)
+          .find(line => line.startsWith('data:'))
+          ?.slice('data:'.length)
+          .trim();
+    if (!jsonText) throw new Error(`Unrecognized MCP response envelope: ${raw.slice(0, 120)}`);
+    return JSON.parse(jsonText);
+  }
+
+  function parseMcpToolPayload(raw: string): any {
+    const envelope = parseMcpEnvelope(raw);
+    const text = envelope?.result?.content?.[0]?.text;
+    if (typeof text !== 'string') {
+      throw new Error(`MCP response has no text tool payload: ${raw.slice(0, 120)}`);
+    }
+    return JSON.parse(text);
+  }
+
   async function listTools(token: string): Promise<Array<{
     name: string;
     annotations?: {
@@ -155,15 +176,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     const raw = await res.text();
     // Streamable HTTP may return either application/json or a one-event SSE
     // envelope depending on SDK content negotiation. Normalize both shapes.
-    const jsonText = raw.trim().startsWith('{')
-      ? raw.trim()
-      : raw
-          .split(/\r?\n/)
-          .find(line => line.startsWith('data:'))
-          ?.slice('data:'.length)
-          .trim();
-    expect(jsonText, `tools/list returned an unrecognized envelope: ${raw.slice(0, 80)}`).toBeDefined();
-    const payload = JSON.parse(jsonText!) as {
+    const payload = parseMcpEnvelope(raw) as {
       result?: { tools?: Array<{
         name: string;
         annotations?: {
@@ -353,38 +366,56 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
 
   test('write-scoped OAuth token is fenced to its registered slug namespace', async () => {
     const { access_token } = await mintToken('read write');
+    const postgres = (await import('postgres')).default;
+    const sql = postgres(process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL || '', { prepare: false });
 
-    const identity = await mcpCall(access_token, 'tools/call', {
-      name: 'whoami',
-      arguments: {},
-    });
-    const identityBody = await identity.text();
-    expect(identityBody).toContain('write_slug_prefixes');
-    expect(identityBody).toContain('inbox/e2e-oauth/*');
+    try {
+      const identity = await mcpCall(access_token, 'tools/call', {
+        name: 'whoami',
+        arguments: {},
+      });
+      const identityBody = await identity.text();
+      expect(identityBody).toContain('write_slug_prefixes');
+      expect(identityBody).toContain('inbox/e2e-oauth/*');
 
-    const inside = await mcpCall(access_token, 'tools/call', {
-      name: 'put_page',
-      arguments: {
-        slug: 'inbox/e2e-oauth/allowed',
-        content: '---\ntitle: OAuth fence allowed path\n---\n\nThis write must succeed.',
-      },
-    });
-    const insideBody = await inside.text();
-    expect(inside.status).not.toBe(401);
-    expect(inside.status).not.toBe(403);
-    expect(insideBody).not.toContain('permission_denied');
-    expect(insideBody).toContain('inbox/e2e-oauth/allowed');
+      const factsBefore = await sql`SELECT COUNT(*)::int AS n FROM facts`;
+      const inside = await mcpCall(access_token, 'tools/call', {
+        name: 'put_page',
+        arguments: {
+          slug: 'inbox/e2e-oauth/allowed',
+          content:
+            '---\ntitle: OAuth fence allowed path\n---\n\n'
+            + 'This substantive remote page names people/arbitrary-target and contains facts. '.repeat(12),
+        },
+      });
+      const insideBody = await inside.text();
+      expect(inside.status).not.toBe(401);
+      expect(inside.status).not.toBe(403);
+      expect(insideBody).not.toContain('permission_denied');
+      const insidePayload = parseMcpToolPayload(insideBody);
+      expect(insidePayload.slug).toBe('inbox/e2e-oauth/allowed');
+      expect(insidePayload.facts_backstop).toEqual({ skipped: 'remote' });
+      expect(insidePayload.write_through).toEqual({ written: false, skipped: 'remote' });
 
-    const outside = await mcpCall(access_token, 'tools/call', {
-      name: 'put_page',
-      arguments: {
-        slug: 'people/e2e-oauth-outside',
-        content: '---\ntitle: OAuth fence test\n---\n\nThis write must be rejected.',
-      },
-    });
-    const outsideBody = await outside.text();
-    expect(outsideBody).toContain('permission_denied');
-    expect(outsideBody).toContain('outside this OAuth client');
+      // The backstop is skipped synchronously, so there is no queued model
+      // output that can later insert an arbitrary entity fact.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const factsAfter = await sql`SELECT COUNT(*)::int AS n FROM facts`;
+      expect(factsAfter[0].n).toBe(factsBefore[0].n);
+
+      const outside = await mcpCall(access_token, 'tools/call', {
+        name: 'put_page',
+        arguments: {
+          slug: 'people/e2e-oauth-outside',
+          content: '---\ntitle: OAuth fence test\n---\n\nThis write must be rejected.',
+        },
+      });
+      const outsideBody = await outside.text();
+      expect(outsideBody).toContain('permission_denied');
+      expect(outsideBody).toContain('outside this OAuth client');
+    } finally {
+      await sql.end();
+    }
   }, 15_000);
 
   test('tools/list advertises only operations allowed by the token scope', async () => {

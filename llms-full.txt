@@ -3754,16 +3754,18 @@ Register clients from the **`/admin` dashboard**:
 
 1. Click **Register client**.
 2. Enter a name (e.g. `perplexity`, `chatgpt`).
-3. Pick scopes: `read`, `write`, `admin` (checkboxes). For non-admin clients
-   selecting `write`, enter at least one explicit slug-prefix grant, such as
-   `inbox/perplexity/*`; unbound routine writes fail closed.
-4. Pick grant type: `client_credentials` for machine-to-machine (Perplexity,
-   Claude Desktop bearer mode) or `authorization_code` for browser-based
-   clients with PKCE (ChatGPT).
-5. For `authorization_code` clients, paste the redirect URI.
-6. Hit **Register**. The credential-reveal modal shows the `client_id` (and
-   `client_secret` for confidential clients) once. Copy or Download JSON
-   immediately — secrets are hashed on storage and never shown again.
+3. Pick scopes. A non-admin client with `write` must also have at least one
+   value in **Write Slug Prefixes**, such as `inbox/perplexity/*`. The
+   dashboard saves those prefixes on the OAuth client; unbound routine writes
+   fail closed.
+4. Pick the token lifetime and hit **Register**. Dashboard registrations use
+   `client_credentials`. The credential-reveal modal shows the `client_id` and
+   `client_secret` once. Copy or Download JSON immediately — secrets are
+   hashed on storage and never shown again.
+
+Use the CLI below for browser-based `authorization_code` clients with PKCE,
+including ChatGPT, because those registrations also need redirect URIs and a
+token authentication method.
 
 Or from the CLI — faster for scripting:
 

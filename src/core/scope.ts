@@ -1,3 +1,5 @@
+import { validateSlug } from './utils.ts';
+
 /**
  * gbrain OAuth scope hierarchy + allowlist (v0.28).
  *
@@ -190,4 +192,62 @@ export function normalizeScopesInput(raw: unknown): string {
   assertAllowedScopes(deduped);
 
   return deduped.join(' ');
+}
+
+/**
+ * Normalize the admin registration API's write-namespace field.
+ *
+ * Accepted shapes:
+ *   - missing/null                         -> []
+ *   - comma/newline-delimited string       -> string[]
+ *   - string[]                             -> string[]
+ *
+ * Each value is either one exact page slug or a trailing `/*` namespace
+ * glob. Other wildcard positions are rejected because matchesSlugAllowList
+ * intentionally supports no other glob syntax. Values are lowercased in the
+ * same way page slugs are, deduplicated, and sorted for deterministic DB rows.
+ */
+export function normalizeBoundSlugPrefixesInput(raw: unknown): string[] {
+  if (raw == null) return [];
+
+  let candidates: string[];
+  if (typeof raw === 'string') {
+    candidates = raw.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+  } else if (Array.isArray(raw)) {
+    candidates = raw.map((value) => {
+      if (typeof value !== 'string') {
+        throw new Error(
+          `boundSlugPrefixes must contain only strings, got ${value === null ? 'null' : typeof value}`,
+        );
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        throw new Error('boundSlugPrefixes must not contain empty strings');
+      }
+      return trimmed;
+    });
+  } else {
+    throw new Error(
+      `boundSlugPrefixes must be a string or array of strings, got ${typeof raw}`,
+    );
+  }
+
+  const normalized = candidates.map((candidate) => {
+    const isNamespaceGlob = candidate.endsWith('/*');
+    const base = isNamespaceGlob ? candidate.slice(0, -2) : candidate;
+    if (!base || base.endsWith('/') || /\s/.test(base)) {
+      throw new Error(
+        `Invalid write slug prefix "${candidate}". Use an exact slug or a namespace ending in /*.`,
+      );
+    }
+    if (base.includes('*')) {
+      throw new Error(
+        `Invalid write slug prefix "${candidate}". Wildcards are supported only as a trailing /*.`,
+      );
+    }
+    const slug = validateSlug(base);
+    return isNamespaceGlob ? `${slug}/*` : slug;
+  });
+
+  return Array.from(new Set(normalized)).sort();
 }
