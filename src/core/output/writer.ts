@@ -93,6 +93,8 @@ export interface PageValidationContext {
   timeline: string;
   frontmatter: Record<string, unknown>;
   engine: BrainEngine;
+  /** Source containing the page and graph rows being validated. */
+  sourceId?: string;
 }
 
 // ---------------------------------------------------------------------------

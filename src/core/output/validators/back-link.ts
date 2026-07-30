@@ -23,8 +23,9 @@ export const backLinkValidator: PageValidator = {
 
   async validate(ctx: PageValidationContext): Promise<ValidationFinding[]> {
     const findings: ValidationFinding[] = [];
+    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : undefined;
 
-    const outbound = await ctx.engine.getLinks(ctx.slug);
+    const outbound = await ctx.engine.getLinks(ctx.slug, sourceOpts);
     if (outbound.length === 0) return findings;
 
     // Iron Law: if ctx.slug → target, target must ALSO link back to ctx.slug.
@@ -34,7 +35,7 @@ export const backLinkValidator: PageValidator = {
     for (const link of outbound) uniqueTargets.add(link.to_slug);
 
     for (const target of uniqueTargets) {
-      const targetOutbound = await ctx.engine.getLinks(target);
+      const targetOutbound = await ctx.engine.getLinks(target, sourceOpts);
       const hasReverse = targetOutbound.some(l => l.to_slug === ctx.slug);
       if (!hasReverse) {
         findings.push({

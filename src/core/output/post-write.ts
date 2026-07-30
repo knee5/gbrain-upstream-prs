@@ -108,6 +108,7 @@ export async function runPostWriteLint(
     timeline: page.timeline,
     frontmatter: page.frontmatter ?? {},
     engine,
+    sourceId: opts.sourceId,
   };
 
   const findings: ValidationFinding[] = [];
