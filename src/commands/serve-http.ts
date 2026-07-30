@@ -28,7 +28,6 @@ import {
   operations,
   OperationError,
   enforceOAuthWriteSlugForAuth,
-  validatePageSlug,
 } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
@@ -187,9 +186,27 @@ export function resolveOAuthIngestSlug(
     }
   }
 
-  validatePageSlug(slug);
-  enforceOAuthWriteSlugForAuth(authInfo, slug, 'webhook_ingest');
-  return slug;
+  // Registration-time namespace bindings use the canonical page-slug
+  // grammar (`validateSlug` via normalizeBoundSlugPrefixesInput), which
+  // intentionally accepts dots/underscores and lowercases values. Reuse that
+  // exact grammar here so a valid binding can always be exercised by
+  // POST /ingest and mixed-case caller input is compared canonically.
+  let normalizedSlug: string;
+  try {
+    const normalized = normalizeBoundSlugPrefixesInput([slug]);
+    normalizedSlug = normalized[0] ?? '';
+    if (!normalizedSlug || normalizedSlug.endsWith('/*')) {
+      throw new Error('a page slug must be exact, not a trailing /* namespace');
+    }
+  } catch (e) {
+    throw new OperationError(
+      'invalid_params',
+      `Invalid POST /ingest page slug: ${e instanceof Error ? e.message : String(e)}`,
+      'Use an exact slug accepted by bound_slug_prefixes; do not use traversal or wildcard syntax.',
+    );
+  }
+  enforceOAuthWriteSlugForAuth(authInfo, normalizedSlug, 'webhook_ingest');
+  return normalizedSlug;
 }
 
 /**
@@ -213,11 +230,16 @@ export function buildOAuthIngestCaptureJobData(
   event: IngestionEvent;
   slug: string;
   target_source_id: string;
+  oauth_ingest_payload_version: 2;
 } {
   return {
     event,
     slug,
     target_source_id: authInfo.sourceId ?? 'default',
+    // Version the authenticated queue envelope, not the public ingestion
+    // event. The worker can now distinguish newly emitted jobs (which must
+    // carry the server stamp) from already-queued pre-upgrade jobs.
+    oauth_ingest_payload_version: 2,
   };
 }
 

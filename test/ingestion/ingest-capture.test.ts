@@ -224,6 +224,7 @@ describe('ingest_capture handler — provenance write-through (#1522)', () => {
       event: ev,
       slug: 'inbox/untrusted-1',
       target_source_id: 'oauth-grant',
+      oauth_ingest_payload_version: 2,
     }));
     expect(result.status).toBe('imported');
 
@@ -251,6 +252,7 @@ describe('ingest_capture handler — provenance write-through (#1522)', () => {
       event: ev,
       slug: 'inbox/untrusted-default',
       target_source_id: 'default',
+      oauth_ingest_payload_version: 2,
     }));
     expect(result.status).toBe('imported');
 
@@ -258,7 +260,7 @@ describe('ingest_capture handler — provenance write-through (#1522)', () => {
     expect(row?.source_id).toBe('default');
   });
 
-  test('untrusted OAuth event without a server-stamped source fails closed', async () => {
+  test('current v2 untrusted OAuth event without a server-stamped source fails closed', async () => {
     const handler = makeIngestCaptureHandler(engine);
     const ev = makeEvent({
       content: '# missing source grant',
@@ -267,6 +269,7 @@ describe('ingest_capture handler — provenance write-through (#1522)', () => {
     await expect(handler(makeJob({
       event: ev,
       slug: 'inbox/untrusted-missing-grant',
+      oauth_ingest_payload_version: 2,
     }))).rejects.toThrow(/requires server-stamped job\.data\.target_source_id/);
   });
 
@@ -280,7 +283,62 @@ describe('ingest_capture handler — provenance write-through (#1522)', () => {
       event: ev,
       slug: 'inbox/untrusted-stale-grant',
       target_source_id: 'deleted-source',
+      oauth_ingest_payload_version: 2,
     }))).rejects.toThrow(/target source 'deleted-source' is not registered/);
+  });
+
+  test('pre-upgrade unversioned untrusted job drains safely into default', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('caller-choice', 'caller-choice') ON CONFLICT (id) DO NOTHING`,
+    );
+    const handler = makeIngestCaptureHandler(engine);
+    const ev = makeEvent({
+      content: '# queued before source stamping',
+      source_id: 'caller-choice',
+      untrusted_payload: true,
+    });
+    const result = await handler(makeJob({
+      event: ev,
+      slug: 'inbox/legacy-untrusted',
+    }));
+    expect(result.status).toBe('imported');
+
+    const row = await pageRow('inbox/legacy-untrusted');
+    expect(row?.source_id).toBe('default');
+  });
+
+  test('transitional unversioned job honors its existing server stamp', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('oauth-grant', 'oauth-grant') ON CONFLICT (id) DO NOTHING`,
+    );
+    const handler = makeIngestCaptureHandler(engine);
+    const ev = makeEvent({
+      content: '# queued by preceding stamped release',
+      source_id: 'caller-choice',
+      untrusted_payload: true,
+    });
+    await handler(makeJob({
+      event: ev,
+      slug: 'inbox/transitional-untrusted',
+      target_source_id: 'oauth-grant',
+    }));
+
+    const row = await pageRow('inbox/transitional-untrusted');
+    expect(row?.source_id).toBe('oauth-grant');
+  });
+
+  test('unknown version fails closed instead of being mistaken for legacy', async () => {
+    const handler = makeIngestCaptureHandler(engine);
+    const ev = makeEvent({
+      content: '# future incompatible envelope',
+      untrusted_payload: true,
+    });
+    await expect(handler(makeJob({
+      event: ev,
+      slug: 'inbox/future-untrusted',
+      target_source_id: 'default',
+      oauth_ingest_payload_version: 99,
+    }))).rejects.toThrow(/unsupported oauth_ingest_payload_version '99'/);
   });
 });
 

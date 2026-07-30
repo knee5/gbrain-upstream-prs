@@ -162,6 +162,58 @@ function defaultSlug(content: string, now: Date = new Date(), type?: string): st
 }
 
 /**
+ * Put a thin client's generated capture slug inside its authenticated write
+ * lane. The server remains the enforcement point; this helper only chooses a
+ * usable default so `gbrain capture "..."` does not predictably ask a routine
+ * client to write to the global inbox.
+ *
+ * Exact-only grants cannot synthesize a child. Those clients must supply
+ * --slug explicitly (or be re-registered with a trailing /* namespace).
+ */
+function resolveThinClientDefaultSlug(
+  generatedSlug: string,
+  identity: unknown,
+): string {
+  if (identity === null || typeof identity !== 'object') {
+    throw new Error('remote whoami returned an invalid identity');
+  }
+  const record = identity as Record<string, unknown>;
+  const scopes = Array.isArray(record.scopes) && record.scopes.every(scope => typeof scope === 'string')
+    ? record.scopes as string[]
+    : [];
+
+  // Admin is the explicit global-write escape hatch and keeps the local
+  // default (including life/diary and life/events routing).
+  if (scopes.includes('admin')) return generatedSlug;
+
+  if (record.transport !== 'oauth') {
+    throw new Error(
+      `remote identity transport '${String(record.transport ?? 'unknown')}' cannot derive a namespace-bound capture slug; pass --slug explicitly`,
+    );
+  }
+  if (
+    !Array.isArray(record.write_slug_prefixes)
+    || !record.write_slug_prefixes.every(prefix => typeof prefix === 'string')
+  ) {
+    throw new Error('remote whoami did not return a valid write_slug_prefixes list');
+  }
+
+  const wildcard = (record.write_slug_prefixes as string[])
+    .find(prefix => prefix.endsWith('/*'));
+  if (!wildcard) {
+    throw new Error(
+      'thin-client OAuth grant is exact-only; pass --slug with an allowed exact slug or re-register with a trailing /* namespace',
+    );
+  }
+
+  const leaf = generatedSlug.slice(generatedSlug.lastIndexOf('/') + 1);
+  if (!leaf) {
+    throw new Error(`generated capture slug '${generatedSlug}' has no page-name segment`);
+  }
+  return `${wildcard.slice(0, -2)}/${leaf}`;
+}
+
+/**
  * v0.39.3.0 CV10 — binary file guard. Scans the first 8KB of `buf` for a
  * NUL byte (0x00). Real text files (including UTF-8 with multi-byte CJK,
  * emoji, BOM) never contain a NUL byte at any position — text encoding
@@ -490,7 +542,34 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
   // The daemon's 24h LRU dedup keys on this hash; identical captures must
   // produce identical hashes. The DB content_hash (importFromContent at
   // src/core/import-file.ts) gets the same treatment in Phase 3d.
-  const slug = parsed.slug ?? defaultSlug(normalizedBody, new Date(), parsed.type);
+  let slug = parsed.slug;
+  if (!slug) {
+    const generatedSlug = defaultSlug(normalizedBody, new Date(), parsed.type);
+    if (isThinClient(cfg)) {
+      try {
+        const identityRaw = await callRemoteTool(
+          cfg!,
+          'whoami',
+          {},
+          { timeoutMs: 30_000 },
+        );
+        const identity = unpackToolResult<Record<string, unknown>>(identityRaw);
+        slug = resolveThinClientDefaultSlug(generatedSlug, identity);
+      } catch (e) {
+        if (e instanceof RemoteMcpError) {
+          console.error(`gbrain capture: remote whoami failed: ${e.message}`);
+          console.error('Run `gbrain remote doctor` to diagnose the connection.');
+        } else {
+          console.error(
+            `gbrain capture: cannot choose a safe thin-client slug: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        process.exit(1);
+      }
+    } else {
+      slug = generatedSlug;
+    }
+  }
   const fullContent = buildContent(rawBody, parsed);
   const capturedAt = new Date().toISOString();
   const contentHash = computeContentHash(normalizedBody);
@@ -635,6 +714,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
 /** Test seam. */
 export const __testing = {
   defaultSlug,
+  resolveThinClientDefaultSlug,
   buildContent,
   mergeCaptureFrontmatter,
   deriveTitle,

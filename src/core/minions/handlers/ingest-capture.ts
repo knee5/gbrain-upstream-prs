@@ -61,6 +61,7 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
       event?: unknown;
       slug?: unknown;
       target_source_id?: unknown;
+      oauth_ingest_payload_version?: unknown;
       noEmbed?: unknown;
     };
     const event = data.event as IngestionEvent | undefined;
@@ -132,16 +133,36 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
     //
     // An untrusted OAuth webhook event is different. Its event.source_id is
     // caller-controlled provenance, so only POST /ingest's server-stamped
-    // job.data.target_source_id may route the write. Requiring that field and
-    // re-checking the registered source makes missing/stale auth context fail
-    // closed instead of silently crossing into `default`.
+    // job.data.target_source_id may route the write.
+    //
+    // Queue compatibility:
+    //   v2               — current envelope; the server stamp is mandatory.
+    //   unversioned+stamp— jobs queued by the immediately preceding release;
+    //                      honor the already-authenticated stamp.
+    //   unversioned      — older jobs that predate source stamping; route to
+    //                      `default`, never to caller-controlled event.source_id.
+    //
+    // This lets a rolling deploy drain durable pre-upgrade work without
+    // weakening the trust boundary for any newly emitted job.
     let sourceId: string | undefined;
-    const candidateSourceId = untrustedPayload
-      ? (typeof data.target_source_id === 'string' ? data.target_source_id.trim() : '')
-      : event.source_id;
-    if (untrustedPayload && candidateSourceId.length === 0) {
+    const stampedTarget = typeof data.target_source_id === 'string'
+      ? data.target_source_id.trim()
+      : '';
+    let candidateSourceId: string;
+    if (!untrustedPayload) {
+      candidateSourceId = event.source_id;
+    } else if (data.oauth_ingest_payload_version === 2) {
+      if (stampedTarget.length === 0) {
+        throw new Error(
+          'ingest_capture: v2 untrusted payload requires server-stamped job.data.target_source_id',
+        );
+      }
+      candidateSourceId = stampedTarget;
+    } else if (data.oauth_ingest_payload_version === undefined) {
+      candidateSourceId = stampedTarget || 'default';
+    } else {
       throw new Error(
-        'ingest_capture: untrusted payload requires server-stamped job.data.target_source_id',
+        `ingest_capture: unsupported oauth_ingest_payload_version '${String(data.oauth_ingest_payload_version)}'`,
       );
     }
     const rows = await engine.executeRaw<{ id: string }>(

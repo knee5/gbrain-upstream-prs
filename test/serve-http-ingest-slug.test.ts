@@ -85,7 +85,16 @@ describe('resolveOAuthIngestSlug', () => {
       'inbox/test-client/../escape',
       HASH,
       NOW,
-    )).toThrow(/Invalid page_slug/);
+    )).toThrow(/Invalid POST \/ingest page slug/);
+  });
+
+  test('uses registration grammar and canonicalizes dots, underscores, and case', () => {
+    expect(resolveOAuthIngestSlug(
+      auth({ writeSlugPrefixes: ['inbox/test_client.v2/*'] }),
+      'INBOX/Test_Client.V2/Capture_01.Markdown',
+      HASH,
+      NOW,
+    )).toBe('inbox/test_client.v2/capture_01.markdown');
   });
 
   test('admin keeps the legacy global-inbox default', () => {
@@ -118,6 +127,7 @@ describe('buildOAuthIngestCaptureJobData', () => {
     );
     expect(data.target_source_id).toBe('chatgpt-mobile');
     expect(data.event.source_id).toBe('caller-controlled-header');
+    expect(data.oauth_ingest_payload_version).toBe(2);
   });
 
   test('legacy/default OAuth clients are stamped to the default source', () => {
@@ -127,5 +137,6 @@ describe('buildOAuthIngestCaptureJobData', () => {
       'inbox/test-client/capture',
     );
     expect(data.target_source_id).toBe('default');
+    expect(data.oauth_ingest_payload_version).toBe(2);
   });
 });

@@ -59,6 +59,45 @@ describe('capture — defaultSlug helper', () => {
     const slug = __testing.defaultSlug('x', new Date('2026-01-05T23:59:59Z'));
     expect(slug).toMatch(/^inbox\/2026-01-05-/);
   });
+
+  test('thin OAuth client puts its generated leaf under the first wildcard lane', () => {
+    const generated = __testing.defaultSlug(
+      'mobile capture',
+      new Date('2026-07-30T12:00:00Z'),
+    );
+    expect(__testing.resolveThinClientDefaultSlug(generated, {
+      transport: 'oauth',
+      scopes: ['read', 'write'],
+      write_slug_prefixes: ['inbox/chatgpt-mobile/*', 'inbox/other/*'],
+    })).toMatch(/^inbox\/chatgpt-mobile\/2026-07-30-[a-f0-9]{8}$/);
+  });
+
+  test('thin OAuth admin preserves the global generated default', () => {
+    const generated = 'life/diary/2026-07-30-12345678';
+    expect(__testing.resolveThinClientDefaultSlug(generated, {
+      transport: 'oauth',
+      scopes: ['read', 'write', 'admin'],
+      write_slug_prefixes: [],
+    })).toBe(generated);
+  });
+
+  test('thin exact-only client must choose an explicit allowed slug', () => {
+    expect(() => __testing.resolveThinClientDefaultSlug(
+      'inbox/2026-07-30-12345678',
+      {
+        transport: 'oauth',
+        scopes: ['read', 'write'],
+        write_slug_prefixes: ['inbox/chatgpt-mobile/fixed'],
+      },
+    )).toThrow(/exact-only.*--slug/);
+  });
+
+  test('non-OAuth routine identity cannot silently fall back to global inbox', () => {
+    expect(() => __testing.resolveThinClientDefaultSlug(
+      'inbox/2026-07-30-12345678',
+      { transport: 'legacy', scopes: ['read', 'write'] },
+    )).toThrow(/cannot derive a namespace-bound capture slug/);
+  });
 });
 
 describe('capture — parseArgs', () => {
