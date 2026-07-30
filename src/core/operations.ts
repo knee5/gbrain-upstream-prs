@@ -708,6 +708,13 @@ export interface Operation {
   handler: (ctx: OperationContext, params: Record<string, unknown>) => Promise<unknown>;
   mutating?: boolean;
   /**
+   * MCP presentation hint for logically read-only operations that may reach
+   * outside the brain's closed data domain. The tool-definition mapper derives
+   * all other annotations from `scope` + `mutating`; keep the exceptional
+   * open-world bit on the operation contract so transports cannot drift.
+   */
+  mcpOpenWorld?: boolean;
+  /**
    * Capability scope required to invoke this op over an authenticated
    * transport. v0.28 added `sources_admin` (manage federated sources) and
    * `users_admin` (reserved). The hierarchy lives in src/core/scope.ts —
@@ -1009,30 +1016,38 @@ const put_page: Operation = {
     // reconciles drift.
     //
     // Trust gating:
-    //   - Subagent sandbox (viaSubagent without allowedSlugPrefixes) → DB-only.
-    //   - All other writes → write-through.
+    //   - Every remote/untrusted caller → DB-only. A source's `local_path` is
+    //     host-specific and may name another account's or machine's checkout;
+    //     the database is the durable cross-host sink.
+    //   - Trusted local CLI callers → atomic write-through.
+    //   - A local sandboxed subagent (defense-in-depth; current dispatchers are
+    //     remote) also stays DB-only.
     let writeThrough: { written: boolean; path?: string; skipped?: string; error?: string } | undefined;
     const isSandboxSubagent = ctx.viaSubagent === true
       && !(Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0);
-    if (!ctx.dryRun && result.status !== 'error' && !isSandboxSubagent) {
+    if (ctx.dryRun) {
+      writeThrough = { written: false, skipped: 'dry_run' };
+    } else if (result.status !== 'error' && ctx.remote !== false) {
+      // Fail closed: a missing/undefined trust bit (possible only via a cast)
+      // is remote too. Do not dereference DB-supplied filesystem paths from an
+      // agent-facing transport.
+      writeThrough = { written: false, skipped: 'remote' };
+    } else if (result.status !== 'error' && isSandboxSubagent) {
+      writeThrough = { written: false, skipped: 'subagent_sandbox' };
+    } else if (result.status !== 'error') {
       const sourceId = ctx.sourceId ?? 'default';
-      const provenanceVia = ctx.remote === false ? 'put_page' : 'mcp:put_page';
       // Shared canonical write-through (also used by `gbrain brainstorm/lsd
       // --save`). Renders the file from the saved DB row and writes it
       // atomically; never throws (failures land in skipped/error).
       writeThrough = await writePageThrough(ctx.engine, result.slug, {
         sourceId,
         frontmatterOverrides: {
-          ingested_via: provenanceVia,
+          ingested_via: 'put_page',
           ingested_at: new Date().toISOString(),
-          source_kind: provenanceVia,
+          source_kind: 'put_page',
         },
         logger: ctx.logger,
       });
-    } else if (isSandboxSubagent) {
-      writeThrough = { written: false, skipped: 'subagent_sandbox' };
-    } else if (ctx.dryRun) {
-      writeThrough = { written: false, skipped: 'dry_run' };
     }
 
     // Auto-link post-hook: runs AFTER importFromContent (which is its own
@@ -4575,6 +4590,10 @@ const search_by_image: Operation = {
     source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId. '__all__' spans every source for trusted local callers, your granted sources for remote callers." },
   },
   scope: 'read',
+  // Unlike normal brain retrieval, image_url intentionally fetches an
+  // external resource (behind the SSRF guard), so advertise this read tool as
+  // open-world instead of inheriting the closed-brain default.
+  mcpOpenWorld: true,
   // NOT localOnly: remote MCP callers can pass image_url or image_data
   // (subject to D18 image_path ban + D12 size cap + D23-#6 spend cap).
   handler: async (ctx, p) => {

@@ -2,9 +2,9 @@
  * put_page write-through tests (v0.38).
  *
  * Verifies that put_page writes the markdown file to disk alongside the
- * DB row when sync.repo_path is configured. Trust gating: subagent
- * sandbox writes stay DB-only; dry-run stays DB-only; missing-repo
- * stays DB-only.
+ * DB row when sync.repo_path is configured. Trust gating: all remote
+ * writes stay DB-only with skipped=remote; trusted local CLI writes retain
+ * the atomic mirror; dry-run and missing-repo paths stay DB-only.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
@@ -112,22 +112,24 @@ describe('put_page write-through — happy path', () => {
     expect(onDisk).toMatch(/ingested_at:/);
   });
 
-  test('MCP/remote callers get ingested_via=mcp:put_page', async () => {
+  test('MCP/remote callers persist provenance to DB but skip filesystem write-through', async () => {
     const ctx = makeCtx({ remote: true });
     const result = (await putPage.handler(ctx, {
       slug: 'inbox/mcp-prov',
       content: '---\ntitle: Q\n---\n\nbody',
-    })) as { write_through?: { written: boolean; path?: string } };
-    expect(result.write_through?.written).toBe(true);
-    const onDisk = fs.readFileSync(result.write_through!.path!, 'utf8');
-    // YAML quotes strings containing `:` so the literal frontmatter line
-    // is `ingested_via: 'mcp:put_page'`. Match the value substring.
-    expect(onDisk).toMatch(/ingested_via:\s*['"]?mcp:put_page['"]?/);
+    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(brainDir, 'inbox/mcp-prov.md'))).toBe(false);
+
+    const page = await engine.getPage('inbox/mcp-prov');
+    expect(page).not.toBeNull();
+    expect(page?.source_kind).toBe('mcp:put_page');
+    expect(page?.ingested_via).toBe('mcp:put_page');
   });
 });
 
 describe('put_page write-through — trust gating', () => {
-  test('subagent sandbox write (viaSubagent without allowedSlugPrefixes) stays DB-only', async () => {
+  test('remote subagent sandbox write stays DB-only with the remote reason', async () => {
     const ctx = makeCtx({
       remote: true,
       viaSubagent: true,
@@ -139,11 +141,12 @@ describe('put_page write-through — trust gating', () => {
       content: '---\ntitle: S\n---\n\nbody',
     })) as { write_through?: { written: boolean; skipped?: string } };
     expect(result.write_through?.written).toBe(false);
-    expect(result.write_through?.skipped).toBe('subagent_sandbox');
+    expect(result.write_through?.skipped).toBe('remote');
     expect(fs.existsSync(path.join(brainDir, 'wiki/agents/42/scratch.md'))).toBe(false);
+    expect(await engine.getPage('wiki/agents/42/scratch')).not.toBeNull();
   });
 
-  test('trusted-workspace subagent (viaSubagent + allowedSlugPrefixes) writes through', async () => {
+  test('trusted-workspace subagent remains remote and therefore DB-only', async () => {
     const ctx = makeCtx({
       remote: true,
       viaSubagent: true,
@@ -153,9 +156,21 @@ describe('put_page write-through — trust gating', () => {
     const result = (await putPage.handler(ctx, {
       slug: 'wiki/personal/reflections/note',
       content: '---\ntitle: R\n---\n\nreflection',
-    })) as { write_through?: { written: boolean; path?: string } };
-    expect(result.write_through?.written).toBe(true);
-    expect(fs.existsSync(result.write_through!.path!)).toBe(true);
+    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(brainDir, 'wiki/personal/reflections/note.md'))).toBe(false);
+    expect(await engine.getPage('wiki/personal/reflections/note')).not.toBeNull();
+  });
+
+  test('missing trust bit fails closed as remote and never dereferences the repo path', async () => {
+    const ctx = makeCtx({ remote: undefined as any });
+    const result = (await putPage.handler(ctx, {
+      slug: 'inbox/fail-closed-remote',
+      content: '---\ntitle: U\n---\n\nbody',
+    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(brainDir, 'inbox/fail-closed-remote.md'))).toBe(false);
+    expect(await engine.getPage('inbox/fail-closed-remote')).not.toBeNull();
   });
 
   test('dry-run stays DB-only (early-return before importFromContent)', async () => {

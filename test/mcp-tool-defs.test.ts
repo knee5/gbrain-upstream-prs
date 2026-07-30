@@ -10,7 +10,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import { operations } from '../src/core/operations.ts';
-import { buildToolDefs, paramDefToSchema } from '../src/mcp/tool-defs.ts';
+import {
+  buildToolDefs,
+  filterOperationsForScopes,
+  paramDefToSchema,
+} from '../src/mcp/tool-defs.ts';
 import type { ParamDef } from '../src/core/operations.ts';
 
 // Reference shape — mirrors the canonical `paramDefToSchema` helper from
@@ -43,7 +47,7 @@ function referenceParamDefToSchema(p: ParamDefLike): Record<string, unknown> {
     ...(p.items ? { items: referenceParamDefToSchema(p.items) } : {}),
   };
 }
-function legacyInlineMap(ops: typeof operations) {
+function referenceToolMap(ops: typeof operations) {
   return ops.map(op => ({
     name: op.name,
     description: op.description,
@@ -56,13 +60,23 @@ function legacyInlineMap(ops: typeof operations) {
         .filter(([, v]) => v.required)
         .map(([k]) => k),
     },
+    ...((op.scope ?? 'read') === 'read' && op.mutating !== true
+      ? {
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: op.mcpOpenWorld === true,
+          },
+        }
+      : {}),
   }));
 }
 
 describe('buildToolDefs', () => {
-  test('output equals pre-extraction inline mapping byte-for-byte', () => {
+  test('output equals the centralized reference mapping byte-for-byte', () => {
     const extracted = buildToolDefs(operations);
-    const inline = legacyInlineMap(operations);
+    const inline = referenceToolMap(operations);
     expect(JSON.stringify(extracted)).toBe(JSON.stringify(inline));
   });
 
@@ -87,6 +101,101 @@ describe('buildToolDefs', () => {
       expect(typeof def.inputSchema.properties).toBe('object');
       expect(Array.isArray(def.inputSchema.required)).toBe(true);
     }
+  });
+});
+
+describe('MCP tool annotations', () => {
+  const expectedClosedReadAnnotations = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+
+  test('every logical read operation has complete annotations', () => {
+    const defs = new Map(buildToolDefs(operations).map(def => [def.name, def]));
+    for (const op of operations) {
+      if ((op.scope ?? 'read') !== 'read' || op.mutating === true) continue;
+      expect(
+        defs.get(op.name)?.annotations,
+        `read tool "${op.name}" is missing complete MCP annotations`,
+      ).toEqual({
+        ...expectedClosedReadAnnotations,
+        openWorldHint: op.mcpOpenWorld === true,
+      });
+    }
+  });
+
+  test('known closed-brain retrieval tools advertise read-only, idempotent, closed-world behavior', () => {
+    const defs = new Map(buildToolDefs(operations).map(def => [def.name, def]));
+    for (const name of ['search', 'query', 'get_page']) {
+      expect(defs.get(name)?.annotations).toEqual(expectedClosedReadAnnotations);
+    }
+  });
+
+  test('search_by_image explicitly advertises its URL-fetching open-world behavior', () => {
+    const def = buildToolDefs(operations).find(tool => tool.name === 'search_by_image');
+    expect(def?.annotations).toEqual({
+      ...expectedClosedReadAnnotations,
+      openWorldHint: true,
+    });
+  });
+
+  test('mutating and privileged non-read operations are not guessed at by the mapper', () => {
+    const defs = new Map(buildToolDefs(operations).map(def => [def.name, def]));
+    for (const op of operations) {
+      if (op.mutating === true || (op.scope ?? 'read') !== 'read') {
+        expect(
+          defs.get(op.name)?.annotations,
+          `non-read tool "${op.name}" received potentially false annotations`,
+        ).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe('filterOperationsForScopes', () => {
+  const remotelyExposed = operations.filter(op => !op.localOnly);
+
+  test('read token sees read tools and no write/admin tools', () => {
+    const names = new Set(
+      filterOperationsForScopes(remotelyExposed, ['read']).map(op => op.name),
+    );
+    expect(names.has('search')).toBe(true);
+    expect(names.has('query')).toBe(true);
+    expect(names.has('put_page')).toBe(false);
+    expect(names.has('delete_page')).toBe(false);
+    expect(names.has('get_health')).toBe(false);
+    expect(names.has('submit_job')).toBe(false);
+  });
+
+  test('write token inherits read, sees write, and still excludes admin', () => {
+    const names = new Set(
+      filterOperationsForScopes(remotelyExposed, ['write']).map(op => op.name),
+    );
+    expect(names.has('search')).toBe(true);
+    expect(names.has('put_page')).toBe(true);
+    expect(names.has('delete_page')).toBe(true);
+    expect(names.has('get_health')).toBe(false);
+    expect(names.has('submit_job')).toBe(false);
+  });
+
+  test('admin token inherits read/write/admin but not the sibling agent scope', () => {
+    const names = new Set(
+      filterOperationsForScopes(remotelyExposed, ['admin']).map(op => op.name),
+    );
+    expect(names.has('search')).toBe(true);
+    expect(names.has('put_page')).toBe(true);
+    expect(names.has('get_health')).toBe(true);
+    expect(names.has('submit_job')).toBe(true);
+    for (const op of remotelyExposed.filter(op => op.scope === ('agent' as any))) {
+      expect(names.has(op.name), `admin must not imply agent tool "${op.name}"`).toBe(false);
+    }
+  });
+
+  test('unknown or empty scopes advertise no tools', () => {
+    expect(filterOperationsForScopes(remotelyExposed, []).length).toBe(0);
+    expect(filterOperationsForScopes(remotelyExposed, ['bogus']).length).toBe(0);
   });
 });
 

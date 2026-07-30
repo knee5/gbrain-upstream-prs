@@ -30,7 +30,7 @@ import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oa
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
-import { paramDefToSchema } from '../mcp/tool-defs.ts';
+import { buildToolDefs, filterOperationsForScopes } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
@@ -1719,6 +1719,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       { name: 'gbrain', version: VERSION },
       { capabilities: { tools: {} } },
     );
+    const advertisedOperations = filterOperationsForScopes(mcpOperations, authInfo.scopes);
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       // v0.28.10: log every JSON-RPC method, not just successful tools/call.
@@ -1744,17 +1745,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         timestamp: new Date().toISOString(),
       });
       return {
-        tools: mcpOperations.map(op => ({
-          name: op.name,
-          description: op.description,
-          inputSchema: {
-            type: 'object' as const,
-            properties: Object.fromEntries(
-              Object.entries(op.params).map(([k, v]) => [k, paramDefToSchema(v)]),
-            ),
-            required: Object.entries(op.params).filter(([, v]) => v.required).map(([k]) => k),
-          },
-        })),
+        tools: buildToolDefs(advertisedOperations),
       };
     });
 

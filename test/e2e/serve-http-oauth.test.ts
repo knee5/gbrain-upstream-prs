@@ -141,6 +141,43 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     });
   }
 
+  async function listTools(token: string): Promise<Array<{
+    name: string;
+    annotations?: {
+      readOnlyHint?: boolean;
+      destructiveHint?: boolean;
+      idempotentHint?: boolean;
+      openWorldHint?: boolean;
+    };
+  }>> {
+    const res = await mcpCall(token, 'tools/list');
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    // Streamable HTTP may return either application/json or a one-event SSE
+    // envelope depending on SDK content negotiation. Normalize both shapes.
+    const jsonText = raw.trim().startsWith('{')
+      ? raw.trim()
+      : raw
+          .split(/\r?\n/)
+          .find(line => line.startsWith('data:'))
+          ?.slice('data:'.length)
+          .trim();
+    expect(jsonText, `tools/list returned an unrecognized envelope: ${raw.slice(0, 80)}`).toBeDefined();
+    const payload = JSON.parse(jsonText!) as {
+      result?: { tools?: Array<{
+        name: string;
+        annotations?: {
+          readOnlyHint?: boolean;
+          destructiveHint?: boolean;
+          idempotentHint?: boolean;
+          openWorldHint?: boolean;
+        };
+      }> };
+    };
+    expect(Array.isArray(payload.result?.tools)).toBe(true);
+    return payload.result!.tools!;
+  }
+
   // =========================================================================
   // Fix 1: client_credentials tokens validate at /mcp
   // =========================================================================
@@ -312,6 +349,50 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     // Should get a result, not an auth error
     expect(body).not.toContain('invalid_token');
     expect(body).not.toContain('insufficient_scope');
+  }, 15_000);
+
+  test('tools/list advertises only operations allowed by the token scope', async () => {
+    const readTools = await listTools((await mintToken('read')).access_token);
+    const writeTools = await listTools((await mintToken('write')).access_token);
+    const adminTools = await listTools((await mintToken('admin')).access_token);
+
+    const readNames = new Set(readTools.map(tool => tool.name));
+    expect(readNames.has('search')).toBe(true);
+    expect(readNames.has('query')).toBe(true);
+    expect(readNames.has('put_page')).toBe(false);
+    expect(readNames.has('delete_page')).toBe(false);
+    expect(readNames.has('get_health')).toBe(false);
+    expect(readNames.has('submit_job')).toBe(false);
+
+    const writeNames = new Set(writeTools.map(tool => tool.name));
+    expect(writeNames.has('search')).toBe(true);
+    expect(writeNames.has('put_page')).toBe(true);
+    expect(writeNames.has('delete_page')).toBe(true);
+    expect(writeNames.has('get_health')).toBe(false);
+    expect(writeNames.has('submit_job')).toBe(false);
+
+    const adminNames = new Set(adminTools.map(tool => tool.name));
+    expect(adminNames.has('search')).toBe(true);
+    expect(adminNames.has('put_page')).toBe(true);
+    expect(adminNames.has('get_health')).toBe(true);
+    expect(adminNames.has('submit_job')).toBe(true);
+
+    // localOnly tools never appear even when their declared scope is satisfied.
+    expect(adminNames.has('sync_brain')).toBe(false);
+    expect(adminNames.has('file_upload')).toBe(false);
+  }, 15_000);
+
+  test('read-token catalog carries complete MCP annotations', async () => {
+    const tools = await listTools((await mintToken('read')).access_token);
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.annotations, `missing annotations for ${tool.name}`).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: tool.name === 'search_by_image',
+      });
+    }
   }, 15_000);
 
   // =========================================================================
