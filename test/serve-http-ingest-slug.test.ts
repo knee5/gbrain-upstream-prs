@@ -36,6 +36,15 @@ describe('resolveOAuthIngestSlug', () => {
     )).toBe('captures/client/2026-07-30-abcdef');
   });
 
+  test('derives beneath a persisted legacy trailing-slash namespace', () => {
+    expect(resolveOAuthIngestSlug(
+      auth({ writeSlugPrefixes: ['wiki/'] }),
+      undefined,
+      HASH,
+      NOW,
+    )).toBe('wiki/2026-07-30-abcdef');
+  });
+
   test('accepts an explicit slug inside the client namespace', () => {
     expect(resolveOAuthIngestSlug(
       auth(),

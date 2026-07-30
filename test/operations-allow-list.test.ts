@@ -170,10 +170,10 @@ describe('put_page — legacy namespace check (regression guard)', () => {
     });
   });
 
-  test('REJECTS write outside wiki/agents/<id>/ when allow-list is empty array', async () => {
+  test('REJECTS even the legacy wiki/agents/<id>/ namespace when allow-list is explicitly empty', async () => {
     const ctx = makeCtx({ allowedSlugPrefixes: [] });
     await expect(put_page.handler(ctx, {
-      slug: 'wiki/personal/reflections/2026-04-25-foo',
+      slug: 'wiki/agents/42/outside-client-binding',
       content: '---\ntitle: x\n---\nbody',
     })).rejects.toMatchObject({
       code: 'permission_denied',
@@ -588,7 +588,28 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
     });
   });
 
-  test('log_ingest preserves empty operator bookkeeping for admin and trusted local callers', async () => {
+  test('log_ingest fails closed on an empty page list for an authless unknown remote context', async () => {
+    await expect(findOp('log_ingest').handler(
+      makeCtx({
+        remote: true,
+        transport: undefined,
+        dryRun: true,
+        viaSubagent: false,
+        subagentId: undefined,
+        auth: undefined,
+      }),
+      {
+        source_type: 'unknown-remote',
+        source_ref: 'context-drop',
+        pages_updated: [],
+        summary: 'Must not bypass authorization through an empty list',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
+  test('log_ingest preserves empty operator bookkeeping for admin, trusted local, and stdio callers', async () => {
     const params = {
       source_type: 'operator',
       source_ref: 'bookkeeping',
@@ -612,5 +633,18 @@ describe('routine OAuth writes — namespace-bound invocation matrix', () => {
       params,
     ) as { dry_run?: boolean };
     expect(local.dry_run).toBe(true);
+
+    const stdio = await findOp('log_ingest').handler(
+      makeCtx({
+        remote: true,
+        transport: 'stdio',
+        dryRun: true,
+        viaSubagent: false,
+        subagentId: undefined,
+        auth: undefined,
+      }),
+      params,
+    ) as { dry_run?: boolean };
+    expect(stdio.dry_run).toBe(true);
   });
 });

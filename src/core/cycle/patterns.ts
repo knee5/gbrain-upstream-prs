@@ -172,6 +172,7 @@ export async function runPhasePatterns(
       model: config.model,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
+      trusted_workspace: true,
     };
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,

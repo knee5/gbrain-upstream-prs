@@ -142,15 +142,17 @@ export async function queryAcrossBrains(
 export function canReadMountsForCtx(ctx: {
   remote: boolean;
   viaSubagent?: boolean;
+  /** Deliberately ignored for trust; retained in the structural input shape. */
   allowedSlugPrefixes?: string[];
+  trustedWorkspace?: boolean;
 }): boolean {
   // Local CLI: always yes.
   if (ctx.remote === false) return true;
-  // Subagent tool-loop: never yes. (Trusted-workspace synthesize/patterns
-  // phases pass `allowedSlugPrefixes` set; those are still subagents per
-  // viaSubagent semantics, but they're trusted. Match that gate.)
+  // Subagent tool-loop: only the explicit internal cycle provenance can
+  // read mounts. A non-empty slug grant is merely write scope and may have
+  // come from a routine remote OAuth submit_agent caller.
   if (ctx.viaSubagent === true) {
-    return Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0;
+    return ctx.trustedWorkspace === true;
   }
   // MCP non-subagent (regular OAuth-scoped read): yes.
   return true;

@@ -168,8 +168,10 @@ export function resolveOAuthIngestSlug(
     if (authInfo.scopes.includes('admin')) {
       slug = `inbox/${suffix}`;
     } else {
-      const wildcard = authInfo.writeSlugPrefixes?.find(prefix => prefix.endsWith('/*'));
-      if (!wildcard) {
+      const namespace = authInfo.writeSlugPrefixes?.find(
+        prefix => prefix.endsWith('/*') || prefix.endsWith('/'),
+      );
+      if (!namespace) {
         // Preserve the canonical missing-namespace error when no binding was
         // loaded. An exact-only grant is different: it is usable, but needs
         // an explicit header because there is no child namespace to derive.
@@ -182,7 +184,10 @@ export function resolveOAuthIngestSlug(
           'Set X-Gbrain-Slug to an allowed exact slug or register a trailing /* namespace.',
         );
       }
-      slug = `${wildcard.slice(0, -2)}/${suffix}`;
+      const namespaceBase = namespace.endsWith('/*')
+        ? namespace.slice(0, -2)
+        : namespace.slice(0, -1);
+      slug = `${namespaceBase}/${suffix}`;
     }
   }
 

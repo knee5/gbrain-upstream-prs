@@ -179,8 +179,8 @@ export function validatePageSlug(slug: string): void {
  * `wiki/originals/*` matches both `wiki/originals/idea-x` and
  * `wiki/originals/ideas/2026-04-25-idea-y`.
  *
- * Used by the v0.23 dream-cycle trusted-workspace path. Order doesn't
- * matter; the first match wins (returns true on any match).
+ * Used by both protected dream-cycle jobs and registration-bounded OAuth
+ * delegation. Order doesn't matter; the first match wins.
  */
 function slugNamespaceBase(grant: string): string | null {
   if (grant.endsWith('/*')) return grant.slice(0, -2);
@@ -248,10 +248,12 @@ function canonicalizeOperationSlug(slug: string, opName: string): string {
  * can reach (put_page, add_timeline_entry). FAIL-CLOSED: `viaSubagent=true`
  * enforces the check even if the dispatcher forgot to populate `subagentId`.
  *
- *   - Trusted-workspace path (ctx.allowedSlugPrefixes set by cycle.ts under
- *     PROTECTED_JOB_NAMES \u2014 MCP cannot reach it): slug must match the
- *     allow-list globs.
- *   - Legacy default: slug must live under `wiki/agents/<subagentId>/...`
+ *   - Delegated namespace path: slug must match the allow-list globs. This
+ *     field is scope only; remote OAuth agents legitimately carry it too.
+ *   - Explicit empty allow-list: deny every slug. This is distinct from an
+ *     omitted allow-list so a persisted `[]` can never widen a delegated job.
+ *   - Legacy default (field omitted): slug must live under
+ *     `wiki/agents/<subagentId>/...`
  *     (anchored, slash-boundary \u2014 `wiki/agents/12evil/*` can't impersonate
  *     subagent 12).
  */
@@ -261,11 +263,11 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
     throw new OperationError('permission_denied', `${opName} via subagent requires ctx.subagentId`);
   }
   const allowList = ctx.allowedSlugPrefixes;
-  if (allowList && allowList.length > 0) {
+  if (allowList !== undefined) {
     if (!matchesSlugAllowList(slug, allowList)) {
       throw new OperationError(
         'permission_denied',
-        `${opName} slug '${slug}' is not within the trusted-workspace allow-list (${allowList.join(', ')})`
+        `${opName} slug '${slug}' is not within the delegated write allow-list (${allowList.join(', ') || 'empty: deny all'})`
       );
     }
   } else {
@@ -488,19 +490,21 @@ export interface OperationContext {
   subagentId?: number;
   viaSubagent?: boolean;
   /**
-   * Trusted-workspace allow-list (v0.23 dream cycle). When the cycle's
-   * synthesize/patterns phases dispatch a subagent, they thread an
+   * Internal provenance bit for protected dream-cycle dispatch. Never infer
+   * this from allowedSlugPrefixes: OAuth submit_agent jobs carry a bounded
+   * namespace but remain remote/untrusted for secondary writes and mounted
+   * brain reads.
+   */
+  trustedWorkspace?: boolean;
+  /**
+   * Per-job write allow-list. When a dispatcher delegates a subagent, it threads an
    * explicit list of slug-prefix globs (e.g. "wiki/personal/reflections/*")
    * through this field. put_page enforces it BEFORE the legacy
    * `wiki/agents/<id>/...` namespace check.
    *
-   * Trust comes from the SUBMITTER (subagent jobs are gated by
-   * PROTECTED_JOB_NAMES — MCP cannot submit them), not from `remote`.
-   * Every subagent tool call has `remote=true` for auto-link safety,
-   * so basing trust on `remote` is incoherent (would always reject).
-   *
-   * Empty / unset → fall back to the legacy namespace check (existing
-   * v0.15 behavior; pure addition, no regression).
+   * Unset → fall back to the legacy namespace check (existing v0.15
+   * behavior). An explicit empty array denies every slug; empty must never
+   * widen a delegated job to the legacy namespace.
    */
   allowedSlugPrefixes?: string[];
   /**
@@ -1162,7 +1166,7 @@ const put_page: Operation = {
     //     remote) also stays DB-only.
     let writeThrough: { written: boolean; path?: string; skipped?: string; error?: string } | undefined;
     const isSandboxSubagent = ctx.viaSubagent === true
-      && !(Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0);
+      && ctx.trustedWorkspace !== true;
     if (result.status !== 'error' && ctx.remote !== false) {
       // Fail closed: a missing/undefined trust bit (possible only via a cast)
       // is remote too. Do not dereference DB-supplied filesystem paths from an
@@ -1198,15 +1202,15 @@ const put_page: Operation = {
       | { skipped: 'remote' }
       | undefined;
     let autoTimeline: { created: number } | { error: string } | { skipped: 'remote' } | undefined;
-    // Trusted-workspace path (v0.23 dream cycle) re-enables auto-link/timeline
-    // even though ctx.remote=true, because the allow-list bounds the slug and
-    // the synthesis prompt is itself the trusted dispatcher. Without this,
+    // Protected dream-cycle provenance re-enables auto-link/timeline even
+    // though ctx.remote=true. The independent allow-list bounds the slug;
+    // trustedWorkspace says the synthesis prompt came from the internal
+    // dispatcher rather than a routine OAuth submit_agent job. Without this,
     // the cycle's `extract` phase would have to recompute every edge, and
     // patterns (which runs after extract) would still see the right graph
     // but auto_timeline would never fire on synth output.
     const trustedWorkspace = ctx.viaSubagent === true
-      && Array.isArray(ctx.allowedSlugPrefixes)
-      && ctx.allowedSlugPrefixes.length > 0;
+      && ctx.trustedWorkspace === true;
     if (ctx.remote !== false && !trustedWorkspace) {
       autoLinks = { skipped: 'remote' };
       autoTimeline = { skipped: 'remote' };
@@ -3019,22 +3023,32 @@ const log_ingest: Operation = {
     // hatch for operator bookkeeping.
     if (
       ctx.remote !== false
-      && ctx.auth
-      && !ctx.auth.scopes.includes('admin')
+      && ctx.transport !== 'stdio'
       && pagesUpdated.length === 0
     ) {
-      if (!ctx.auth.writeSlugPrefixes || ctx.auth.writeSlugPrefixes.length === 0) {
+      if (!ctx.auth) {
+        throw new OperationError(
+          'permission_denied',
+          'log_ingest requires an authenticated remote identity.',
+          'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
+        );
+      }
+      if (ctx.auth.scopes.includes('admin')) {
+        // Explicit operator escape hatch: admin may append bookkeeping events
+        // that do not claim any page mutation.
+      } else if (!ctx.auth.writeSlugPrefixes || ctx.auth.writeSlugPrefixes.length === 0) {
         throw new OperationError(
           'permission_denied',
           'log_ingest requires an OAuth write namespace; this client has no bound_slug_prefixes.',
           'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
         );
+      } else {
+        throw new OperationError(
+          'invalid_params',
+          'log_ingest requires at least one pages_updated slug for a routine remote OAuth writer.',
+          'Name at least one page inside the client write namespace.',
+        );
       }
-      throw new OperationError(
-        'invalid_params',
-        'log_ingest requires at least one pages_updated slug for a routine remote OAuth writer.',
-        'Name at least one page inside the client write namespace.',
-      );
     }
     // pages_updated is part of the durable ingestion audit trail. Fence every
     // referenced page so a namespace-bound client cannot claim arbitrary
@@ -3377,12 +3391,28 @@ const submit_agent: Operation = {
     }
 
     // Validate each param against the binding.
+    if (p.allowed_tools !== undefined) {
+      if (!Array.isArray(p.allowed_tools) || p.allowed_tools.length === 0) {
+        throw new OperationError(
+          'invalid_params',
+          'submit_agent: allowed_tools must be a non-empty array when supplied. Omit it to use the registered bound_tools.',
+        );
+      }
+    }
     const requestedTools = (p.allowed_tools as string[] | undefined) ?? boundTools;
     for (const t of requestedTools) {
       if (!boundTools.includes(t)) {
         throw new OperationError(
           'permission_denied',
           `submit_agent: tool "${t}" is not in client ${clientId}'s bound_tools (${boundTools.join(', ')}).`,
+        );
+      }
+    }
+    if (p.allowed_slug_prefixes !== undefined) {
+      if (!Array.isArray(p.allowed_slug_prefixes) || p.allowed_slug_prefixes.length === 0) {
+        throw new OperationError(
+          'invalid_params',
+          'submit_agent: allowed_slug_prefixes must be a non-empty array when supplied. Omit it to use the registered bound_slug_prefixes.',
         );
       }
     }
@@ -3398,6 +3428,17 @@ const submit_agent: Operation = {
           `submit_agent: slug_prefix "${String(sp)}" is not under any of client ${clientId}'s bound_slug_prefixes.`,
         );
       }
+    }
+    const delegatedWriteTools = new Set(['put_page', 'add_timeline_entry']);
+    if (
+      requestedSlugPrefixes.length === 0
+      && requestedTools.some(tool => delegatedWriteTools.has(tool.replace(/^brain_/, '')))
+    ) {
+      throw new OperationError(
+        'permission_denied',
+        `submit_agent: client ${clientId} requested write-capable tools but has no delegated slug namespace.`,
+        'Register bound_slug_prefixes or dispatch only read-only tools.',
+      );
     }
 
     // Concurrency cap: count active+waiting agent jobs for this client.
@@ -4071,10 +4112,11 @@ const get_recent_transcripts: Operation = {
   },
   handler: async (ctx, p) => {
     // Trust gate (eng review D2 + codex C3): MCP / HTTP callers (`remote=true`)
-    // are blocked. Local CLI callers (`remote=false`) and the trusted-workspace
-    // dream cycle pass through. This op is intentionally NOT in the subagent
-    // allow-list (subagents always run with remote=true; they would always be
-    // rejected, which is a footgun if the op is visible).
+    // are blocked. Local CLI callers (`remote=false`) pass through. The dream
+    // cycle discovers transcripts directly instead of exposing this op. It is
+    // intentionally NOT in the subagent allow-list (subagents always run with
+    // remote=true; they would always be rejected, which is a footgun if the
+    // op is visible).
     if (ctx.remote === true) {
       throw new OperationError(
         'permission_denied',

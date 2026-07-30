@@ -25,6 +25,7 @@ describe('patterns phase wiring', () => {
 
   test('threads allowed_slug_prefixes from filing-rules JSON', () => {
     expect(patternsSrc).toContain('allowed_slug_prefixes');
+    expect(patternsSrc).toContain('trusted_workspace: true');
     expect(patternsSrc).toContain('_brain-filing-rules.json');
     expect(patternsSrc).toContain('dream_synthesize_paths');
   });

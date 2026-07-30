@@ -223,7 +223,24 @@ describe('put_page write-through — trust gating', () => {
     expect(await engine.getPage('wiki/agents/42/scratch')).not.toBeNull();
   });
 
-  test('trusted-workspace subagent remains remote and therefore DB-only', async () => {
+  test('local slug-bounded subagent remains sandboxed without protected-cycle provenance', async () => {
+    const ctx = makeCtx({
+      remote: false,
+      viaSubagent: true,
+      subagentId: 6,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+    });
+    const result = (await putPage.handler(ctx, {
+      slug: 'wiki/personal/reflections/local-sandbox',
+      content: '---\ntitle: Local sandbox\n---\n\nreflection',
+    })) as { write_through?: { written: boolean; skipped?: string } };
+
+    expect(result.write_through).toEqual({ written: false, skipped: 'subagent_sandbox' });
+    expect(fs.existsSync(path.join(brainDir, 'wiki/personal/reflections/local-sandbox.md'))).toBe(false);
+    expect(await engine.getPage('wiki/personal/reflections/local-sandbox')).not.toBeNull();
+  });
+
+  test('slug-bounded remote subagent remains untrusted for secondary writes', async () => {
     const ctx = makeCtx({
       remote: true,
       viaSubagent: true,
@@ -233,10 +250,44 @@ describe('put_page write-through — trust gating', () => {
     const result = (await putPage.handler(ctx, {
       slug: 'wiki/personal/reflections/note',
       content: '---\ntitle: R\n---\n\nreflection',
-    })) as { write_through?: { written: boolean; path?: string; skipped?: string } };
+    })) as {
+      auto_links?: { skipped?: string };
+      auto_timeline?: { skipped?: string };
+      facts_backstop?: { skipped?: string };
+      chronicle_backstop?: { skipped?: string };
+      write_through?: { written: boolean; path?: string; skipped?: string };
+    };
     expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(result.auto_links).toEqual({ skipped: 'remote' });
+    expect(result.auto_timeline).toEqual({ skipped: 'remote' });
+    expect(result.facts_backstop).toEqual({ skipped: 'remote' });
+    expect(result.chronicle_backstop).toEqual({ skipped: 'remote' });
     expect(fs.existsSync(path.join(brainDir, 'wiki/personal/reflections/note.md'))).toBe(false);
     expect(await engine.getPage('wiki/personal/reflections/note')).not.toBeNull();
+  });
+
+  test('protected-cycle provenance, not slug scope, enables trusted secondary processing', async () => {
+    const ctx = makeCtx({
+      remote: true,
+      viaSubagent: true,
+      subagentId: 8,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      trustedWorkspace: true,
+    });
+    const result = (await putPage.handler(ctx, {
+      slug: 'wiki/personal/reflections/protected-cycle-note',
+      content: '---\ntitle: Protected cycle\n---\n\nreflection',
+    })) as {
+      auto_links?: { skipped?: string };
+      auto_timeline?: { skipped?: string };
+      facts_backstop?: { skipped?: string };
+      chronicle_backstop?: { skipped?: string };
+    };
+
+    expect(result.auto_links?.skipped).not.toBe('remote');
+    expect(result.auto_timeline?.skipped).not.toBe('remote');
+    expect(result.facts_backstop?.skipped).not.toBe('remote');
+    expect(result.chronicle_backstop?.skipped).not.toBe('remote');
   });
 
   test('missing transport identity fails closed before DB or filesystem writes', async () => {
