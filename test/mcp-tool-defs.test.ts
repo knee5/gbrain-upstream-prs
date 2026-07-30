@@ -175,7 +175,8 @@ describe('filterOperationsForScopes', () => {
     );
     expect(names.has('search')).toBe(true);
     expect(names.has('put_page')).toBe(true);
-    expect(names.has('delete_page')).toBe(true);
+    expect(names.has('delete_page')).toBe(false);
+    expect(names.has('restore_page')).toBe(false);
     expect(names.has('get_health')).toBe(false);
     expect(names.has('submit_job')).toBe(false);
   });
@@ -186,6 +187,8 @@ describe('filterOperationsForScopes', () => {
     );
     expect(names.has('search')).toBe(true);
     expect(names.has('put_page')).toBe(true);
+    expect(names.has('delete_page')).toBe(true);
+    expect(names.has('restore_page')).toBe(true);
     expect(names.has('get_health')).toBe(true);
     expect(names.has('submit_job')).toBe(true);
     for (const op of remotelyExposed.filter(op => op.scope === ('agent' as any))) {

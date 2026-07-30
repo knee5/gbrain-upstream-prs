@@ -226,6 +226,40 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
 }
 
 /**
+ * OAuth page-write namespace fence.
+ *
+ * Routine remote writers (`read write`, without `admin`) must carry an
+ * explicit registration-time `bound_slug_prefixes` grant and the requested
+ * slug must match it. Missing metadata fails closed, including on an older
+ * schema where token verification could not load the column. Admin remains
+ * the explicit operator escape hatch. Trusted local callers and auth-less
+ * stdio keep their existing behavior; the latter is outside the OAuth
+ * boundary and remains governed by the local-pipe deployment policy.
+ */
+export function enforceOAuthWriteSlugFence(
+  ctx: OperationContext,
+  slug: string,
+  opName: string,
+): void {
+  if (ctx.remote === false || !ctx.auth || ctx.auth.scopes.includes('admin')) return;
+  const allowList = ctx.auth.writeSlugPrefixes;
+  if (!allowList || allowList.length === 0) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} requires an OAuth write namespace; this client has no bound_slug_prefixes.`,
+      'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
+    );
+  }
+  if (!matchesSlugAllowList(slug, allowList)) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} slug '${slug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
+      'Write under an allowed prefix or ask the operator to register a different namespace.',
+    );
+  }
+}
+
+/**
  * Allowlist validator for uploaded file basenames. Rejects control chars, backslashes,
  * RTL overrides (\u202E), leading dot (hidden files) and leading dash (CLI flag confusion).
  * Allows extension dots and underscores. Max 255 chars.
@@ -304,6 +338,17 @@ export interface AuthInfo {
    * case (back-compat).
    */
   allowedSources?: string[];
+  /**
+   * Slug-prefix globs this OAuth client may create or update through
+   * `put_page`. Sourced from `oauth_clients.bound_slug_prefixes` at
+   * token-verification time. A non-admin remote caller with no entries is
+   * denied page writes; absence never means "all slugs".
+   *
+   * The same persisted binding also constrains `submit_agent` child writes.
+   * Reusing one registration-time boundary keeps direct and delegated writes
+   * from drifting onto different namespace policies.
+   */
+  writeSlugPrefixes?: string[];
 }
 
 export interface OperationContext {
@@ -899,6 +944,10 @@ const put_page: Operation = {
     // short-circuit so preview calls surface the same rejection. See
     // enforceSubagentSlugFence for the fail-closed policy.
     enforceSubagentSlugFence(ctx, slug, 'put_page');
+    // OAuth clients with routine write scope are narrower than an operator:
+    // they may create/update only beneath their registration-time namespace.
+    // Runs before dry-run so previews exercise the same authorization gate.
+    enforceOAuthWriteSlugFence(ctx, slug, 'put_page');
 
     if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug: p.slug };
 
@@ -1042,9 +1091,7 @@ const put_page: Operation = {
       writeThrough = await writePageThrough(ctx.engine, result.slug, {
         sourceId,
         frontmatterOverrides: {
-          ingested_via: 'put_page',
           ingested_at: new Date().toISOString(),
-          source_kind: 'put_page',
         },
         logger: ctx.logger,
       });
@@ -1419,7 +1466,7 @@ const delete_page: Operation = {
     slug: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
     if (ctx.dryRun) return { dry_run: true, action: 'soft_delete_page', slug };
@@ -1452,7 +1499,7 @@ const restore_page: Operation = {
     slug: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
     if (ctx.dryRun) return { dry_run: true, action: 'restore_page', slug };
@@ -3904,7 +3951,7 @@ const whoami: Operation = {
   name: 'whoami',
   description:
     'Introspect the calling identity. Returns one of three transport shapes: ' +
-    '{transport: "oauth", client_id, client_name, scopes, expires_at, source_id, federated_read}, ' +
+    '{transport: "oauth", client_id, client_name, scopes, expires_at, source_id, federated_read, write_slug_prefixes}, ' +
     '{transport: "legacy", token_name, scopes, expires_at: null}, or ' +
     '{transport: "local", scopes: []}, or {transport: "stdio", scopes: []} ' +
     'for the auth-less stdio MCP pipe. Throws unknown_transport when the ' +
@@ -3950,6 +3997,7 @@ const whoami: Operation = {
         // widens nothing; absent grants serialize fail-closed (null / []).
         source_id: ctx.auth.sourceId ?? null,
         federated_read: ctx.auth.allowedSources ?? [],
+        write_slug_prefixes: ctx.auth.writeSlugPrefixes ?? [],
       };
     }
     return {

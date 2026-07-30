@@ -141,7 +141,7 @@ describe('client registration', () => {
   });
 
   test('registerClientManual persists submit_agent bindings when supplied', async () => {
-    const { clientId } = await provider.registerClientManual(
+    const { clientId, clientSecret } = await provider.registerClientManual(
       'bound-agent', ['client_credentials'], 'read agent', [], 'default', undefined, undefined, {
         boundTools: ['search', 'get_page'],
         boundSourceId: 'dept-x',
@@ -163,6 +163,14 @@ describe('client registration', () => {
     expect(rows[0].bound_slug_prefixes).toEqual(['wiki/agents/bound-agent/']);
     expect(Number(rows[0].bound_max_concurrent)).toBe(2);
     expect(rows[0].budget).toBe('7.50');
+
+    const tokens = await provider.exchangeClientCredentials(
+      clientId,
+      clientSecret!,
+      'read agent',
+    );
+    const authInfo = await provider.verifyAccessToken(tokens.access_token) as CoreAuthInfo;
+    expect(authInfo.writeSlugPrefixes).toEqual(['wiki/agents/bound-agent/']);
   });
 });
 

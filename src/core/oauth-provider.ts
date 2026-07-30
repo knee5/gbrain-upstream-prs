@@ -592,7 +592,8 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     const now = Math.floor(Date.now() / 1000);
 
     // Try OAuth tokens first. JOIN oauth_clients in the same query so
-    // verifyAccessToken returns client_name AND source_id in AuthInfo —
+    // verifyAccessToken returns identity, source scope, and the page-write
+    // namespace in AuthInfo —
     // eliminates the separate per-request lookup at serve-http.ts that
     // was the N+1 hot path (see PR #586 review D14=B; v0.34.1 #861 D2
     // adds the source_id thread on the same JOIN).
@@ -606,7 +607,7 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     try {
       oauthRows = await this.sql`
         SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name,
-               c.source_id, c.federated_read
+               c.source_id, c.federated_read, c.bound_slug_prefixes
         FROM oauth_tokens t
         LEFT JOIN oauth_clients c ON c.client_id = t.client_id
         WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
@@ -617,7 +618,18 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
       // projection so auth keeps working until the operator runs
       // apply-migrations. Probe both column names so partial-upgrade brains
       // (v60 applied but v61 didn't yet) also fall through cleanly.
-      if (isUndefinedColumnError(err, 'source_id') || isUndefinedColumnError(err, 'federated_read')) {
+      if (isUndefinedColumnError(err, 'bound_slug_prefixes')) {
+        // Pre-binding schema: reads and identity continue to work, but
+        // writeSlugPrefixes stays undefined so put_page fails closed for
+        // non-admin OAuth callers.
+        oauthRows = await this.sql`
+          SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name,
+                 c.source_id, c.federated_read
+          FROM oauth_tokens t
+          LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+          WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
+        `;
+      } else if (isUndefinedColumnError(err, 'source_id') || isUndefinedColumnError(err, 'federated_read')) {
         // Try the v60-only projection first (source_id but no federated_read).
         try {
           oauthRows = await this.sql`
@@ -662,6 +674,10 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
       const allowedSources = Array.isArray(federatedRaw)
         ? (federatedRaw as string[])
         : undefined;
+      const writePrefixesRaw = row.bound_slug_prefixes;
+      const writeSlugPrefixes = Array.isArray(writePrefixesRaw)
+        ? (writePrefixesRaw as string[])
+        : undefined;
       return {
         token,
         clientId: row.client_id as string,
@@ -677,6 +693,10 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
         // operations.ts prefers this array over scalar sourceId when set
         // and non-empty.
         allowedSources,
+        // Existing oauth_clients binding, now also enforced for direct
+        // put_page create/update calls. Undefined on old/null rows is
+        // deliberately fail-closed at the operation boundary.
+        writeSlugPrefixes,
       } as CoreAuthInfo as SdkAuthInfo;
     }
 

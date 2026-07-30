@@ -54,7 +54,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     // get the subset they ask for — adding admin to the client's allowed
     // ceiling does not auto-grant it to every minted token.
     const regOutput = execSync(
-      'bun run src/cli.ts auth register-client e2e-oauth-test --grant-types client_credentials --scopes "read write admin"',
+      'bun run src/cli.ts auth register-client e2e-oauth-test --grant-types client_credentials --scopes "read write admin" --bound-slug-prefixes "inbox/e2e-oauth/*"',
       { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env } }
     );
     const idMatch = regOutput.match(/Client ID:\s+(gbrain_cl_\S+)/);
@@ -351,6 +351,29 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     expect(body).not.toContain('insufficient_scope');
   }, 15_000);
 
+  test('write-scoped OAuth token is fenced to its registered page namespace', async () => {
+    const { access_token } = await mintToken('read write');
+
+    const identity = await mcpCall(access_token, 'tools/call', {
+      name: 'whoami',
+      arguments: {},
+    });
+    const identityBody = await identity.text();
+    expect(identityBody).toContain('write_slug_prefixes');
+    expect(identityBody).toContain('inbox/e2e-oauth/*');
+
+    const outside = await mcpCall(access_token, 'tools/call', {
+      name: 'put_page',
+      arguments: {
+        slug: 'people/e2e-oauth-outside',
+        content: '---\ntitle: OAuth fence test\n---\n\nThis write must be rejected.',
+      },
+    });
+    const outsideBody = await outside.text();
+    expect(outsideBody).toContain('permission_denied');
+    expect(outsideBody).toContain('outside this OAuth client');
+  }, 15_000);
+
   test('tools/list advertises only operations allowed by the token scope', async () => {
     const readTools = await listTools((await mintToken('read')).access_token);
     const writeTools = await listTools((await mintToken('write')).access_token);
@@ -367,13 +390,16 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     const writeNames = new Set(writeTools.map(tool => tool.name));
     expect(writeNames.has('search')).toBe(true);
     expect(writeNames.has('put_page')).toBe(true);
-    expect(writeNames.has('delete_page')).toBe(true);
+    expect(writeNames.has('delete_page')).toBe(false);
+    expect(writeNames.has('restore_page')).toBe(false);
     expect(writeNames.has('get_health')).toBe(false);
     expect(writeNames.has('submit_job')).toBe(false);
 
     const adminNames = new Set(adminTools.map(tool => tool.name));
     expect(adminNames.has('search')).toBe(true);
     expect(adminNames.has('put_page')).toBe(true);
+    expect(adminNames.has('delete_page')).toBe(true);
+    expect(adminNames.has('restore_page')).toBe(true);
     expect(adminNames.has('get_health')).toBe(true);
     expect(adminNames.has('submit_job')).toBe(true);
 

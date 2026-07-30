@@ -29,25 +29,33 @@ gbrain auth register-client chatgpt \
   --grant-types authorization_code,refresh_token \
   --scopes "read write" \
   --redirect-uri "PASTE_EXACT_CHATGPT_REDIRECT_URI" \
+  --bound-slug-prefixes "inbox/chatgpt/*" \
   --token-endpoint-auth-method none
 ```
 
 Save the printed `client_id`. A PKCE public client has no client secret.
 
 The `read write` grant is intentional: a trusted ChatGPT connector is both a
-retrieval and intake surface, so it must be able to call `put_page`. Do not
-reuse a read-only dashboard/export client for ChatGPT, and do not add `admin`.
-Anonymous dynamic registration and generic `register-client` calls remain
-read-only unless the operator explicitly grants `write`.
+retrieval and intake surface, so it must be able to call `put_page`.
+`--bound-slug-prefixes "inbox/chatgpt/*"` confines those creates and updates to
+ChatGPT's intake lane. Missing or mismatched write-prefix metadata is denied.
+Use a comma-separated list when a connector needs more than one intake lane.
+Do not reuse a read-only dashboard/export client for ChatGPT, and do not add
+`admin`. Anonymous dynamic registration and generic `register-client` calls
+remain read-only unless the operator explicitly grants `write`.
 
 Host-repo wrappers can register programmatically:
 
 ```ts
 await oauthProvider.registerClientManual(
   'chatgpt',
-  ['authorization_code'],
+  ['authorization_code', 'refresh_token'],
   'read write',
   ['https://chat.openai.com/connector_platform_oauth_redirect'],
+  'default',
+  ['default'],
+  'none',
+  { boundSlugPrefixes: ['inbox/chatgpt/*'] },
 );
 ```
 
@@ -87,6 +95,11 @@ Required trusted-connector scope: `read write`. Leave `admin` for your local
 CLI and the admin dashboard. A deliberately read-only public consumer can use
 `read`, but it is not a complete GBrain intake surface.
 
+Routine OAuth `write` tokens may create or update pages only beneath their
+registered `bound_slug_prefixes`. They cannot call `delete_page` or
+`restore_page`; both are lifecycle operations and require `admin`. This lets
+ChatGPT record new information without giving it deletion or recovery powers.
+
 ## Troubleshooting
 
 **"Invalid redirect_uri" during the ChatGPT connector OAuth handshake**
@@ -104,6 +117,12 @@ the Request Log tab shows the exact error.
 ChatGPT uses `authorization_code`, which the MCP SDK supports natively.
 If you see this error, verify the client was registered with
 `--grant-types authorization_code` and not `client_credentials`.
+
+**"`put_page` requires an OAuth write namespace"**
+Re-register the connector with `--bound-slug-prefixes`, complete a fresh OAuth
+authorization, and confirm `whoami` reports the expected
+`write_slug_prefixes`. Existing access tokens do not acquire newly registered
+client metadata from a different client record.
 
 ## See also
 

@@ -146,8 +146,23 @@ export async function writePageThrough(
     }
 
     const tags = await engine.getTags(slug, { sourceId });
+    // Provenance columns are canonical DB state, not ordinary frontmatter.
+    // Carry populated values into the mirror before applying the caller's
+    // explicit render-time overrides. Without this bridge, removing a stale
+    // hard-coded provenance label from a caller would silently omit the real
+    // provenance from disk even though it was present on the saved row.
+    const persistedProvenance: Record<string, unknown> = {};
+    if (writtenPage.source_kind != null) persistedProvenance.source_kind = writtenPage.source_kind;
+    if (writtenPage.source_uri != null) persistedProvenance.source_uri = writtenPage.source_uri;
+    if (writtenPage.ingested_via != null) persistedProvenance.ingested_via = writtenPage.ingested_via;
+    if (writtenPage.ingested_at != null) {
+      persistedProvenance.ingested_at = writtenPage.ingested_at.toISOString();
+    }
     const md = serializePageToMarkdown(writtenPage, tags, {
-      frontmatterOverrides: opts.frontmatterOverrides,
+      frontmatterOverrides: {
+        ...persistedProvenance,
+        ...(opts.frontmatterOverrides ?? {}),
+      },
     });
 
     // #2831: two distinct DB slugs differing only by case (FOO vs foo) resolve

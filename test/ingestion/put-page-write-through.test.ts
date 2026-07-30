@@ -100,16 +100,25 @@ describe('put_page write-through — happy path', () => {
     expect(onDisk).toContain('WT body');
   });
 
-  test('stamps provenance frontmatter (ingested_via=put_page for local CLI)', async () => {
+  test('mirrors the DB row provenance instead of replacing trusted-local values', async () => {
     const ctx = makeCtx({ remote: false });
     const result = (await putPage.handler(ctx, {
       slug: 'inbox/provenance',
       content: '---\ntitle: P\n---\n\nbody',
+      source_kind: 'capture-cli',
+      source_uri: 'file:///tmp/example-note.md',
+      ingested_via: 'capture-cli',
     })) as { write_through?: { written: boolean; path?: string } };
     expect(result.write_through?.written).toBe(true);
     const onDisk = fs.readFileSync(result.write_through!.path!, 'utf8');
-    expect(onDisk).toMatch(/ingested_via:\s*put_page/);
+    expect(onDisk).toMatch(/source_kind:\s*capture-cli/);
+    expect(onDisk).toMatch(/ingested_via:\s*capture-cli/);
+    expect(onDisk).toContain('file:///tmp/example-note.md');
     expect(onDisk).toMatch(/ingested_at:/);
+    const page = await engine.getPage('inbox/provenance');
+    expect(page?.source_kind).toBe('capture-cli');
+    expect(page?.ingested_via).toBe('capture-cli');
+    expect(page?.source_uri).toBe('file:///tmp/example-note.md');
   });
 
   test('MCP/remote callers persist provenance to DB but skip filesystem write-through', async () => {

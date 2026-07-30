@@ -64,6 +64,7 @@ describe('whoami op contract', () => {
       expiresAt: 1234567890,
       sourceId: 'hot-memory',
       allowedSources: ['hot-memory', 'canonical-brain'],
+      writeSlugPrefixes: ['inbox/chatgpt/*'],
     };
     const result = (await whoami.handler(
       ctxWith({ remote: true, sourceId: 'transport-fallback', auth }),
@@ -77,6 +78,7 @@ describe('whoami op contract', () => {
       expires_at: 1234567890,
       source_id: 'hot-memory',
       federated_read: ['hot-memory', 'canonical-brain'],
+      write_slug_prefixes: ['inbox/chatgpt/*'],
     });
   });
 
@@ -92,6 +94,7 @@ describe('whoami op contract', () => {
     )) as any;
     expect(result.source_id).toBeNull();
     expect(result.federated_read).toEqual([]);
+    expect(result.write_slug_prefixes).toEqual([]);
   });
 
   test('oauth transport preserves an explicit empty federated grant', async () => {
@@ -205,6 +208,7 @@ describe('whoami op metadata', () => {
   test('description documents OAuth source grant fields', () => {
     expect(whoami.description).toContain('source_id');
     expect(whoami.description).toContain('federated_read');
+    expect(whoami.description).toContain('write_slug_prefixes');
   });
 
   test('scope is read (any authenticated caller can introspect itself)', () => {

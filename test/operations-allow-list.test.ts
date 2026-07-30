@@ -11,6 +11,8 @@
  *     anti-prompt-injection guarantee)
  *   - put_page rejects when viaSubagent=true but subagentId is missing
  *     (regression guard for FAIL-CLOSED behavior)
+ *   - routine OAuth writers require a registration-time write namespace,
+ *     while admin and trusted local callers retain operator behavior
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -159,5 +161,86 @@ describe('put_page — legacy namespace check (regression guard)', () => {
     })).rejects.toMatchObject({
       code: 'permission_denied',
     });
+  });
+});
+
+describe('put_page — OAuth write namespace', () => {
+  const put_page = findOp('put_page');
+  const oauthCtx = (
+    writeSlugPrefixes: string[] | undefined,
+    scopes = ['read', 'write'],
+  ) => makeCtx({
+    dryRun: true,
+    viaSubagent: false,
+    subagentId: undefined,
+    auth: {
+      token: 'test-token',
+      clientId: 'gbrain_cl_chatgpt',
+      scopes,
+      writeSlugPrefixes,
+    },
+  });
+
+  test('ALLOWS create/update beneath a registered prefix', async () => {
+    const result = await put_page.handler(
+      oauthCtx(['inbox/chatgpt/*']),
+      {
+        slug: 'inbox/chatgpt/session-1',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    ) as { dry_run?: boolean };
+    expect(result.dry_run).toBe(true);
+  });
+
+  test('REJECTS routine OAuth writes when the namespace binding is absent', async () => {
+    await expect(put_page.handler(
+      oauthCtx(undefined),
+      {
+        slug: 'inbox/chatgpt/session-1',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
+  test('REJECTS routine OAuth writes outside the registered prefix', async () => {
+    await expect(put_page.handler(
+      oauthCtx(['inbox/chatgpt/*']),
+      {
+        slug: 'people/alice-example',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
+  test('ALLOWS an explicit admin OAuth token without a write prefix', async () => {
+    const result = await put_page.handler(
+      oauthCtx(undefined, ['admin']),
+      {
+        slug: 'people/alice-example',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    ) as { dry_run?: boolean };
+    expect(result.dry_run).toBe(true);
+  });
+
+  test('trusted local callers retain unrestricted page-write behavior', async () => {
+    const result = await put_page.handler(
+      makeCtx({
+        remote: false,
+        dryRun: true,
+        viaSubagent: false,
+        subagentId: undefined,
+        auth: undefined,
+      }),
+      {
+        slug: 'people/alice-example',
+        content: '---\ntitle: x\n---\nbody',
+      },
+    ) as { dry_run?: boolean };
+    expect(result.dry_run).toBe(true);
   });
 });
