@@ -215,6 +215,79 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
       expect(r1.dry_run).toBe(true);
     });
 
+    it('allows exact descendants and narrower wildcard namespaces under a wildcard binding', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor/*'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor/page-1'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      const narrower = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor/session-1/*'],
+      });
+      expect(narrower.dry_run).toBe(true);
+    });
+
+    it('treats an exact binding as exact, not as a parent namespace', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['inbox/cursor/child'],
+        }),
+      ).rejects.toThrow(/slug_prefix "inbox\/cursor\/child" is not under any.*bound_slug_prefixes/);
+    });
+
+    it('rejects a sibling namespace that merely shares an exact string prefix', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['inbox/cursor-evil/*'],
+        }),
+      ).rejects.toThrow(/slug_prefix "inbox\/cursor-evil\/\*" is not under any.*bound_slug_prefixes/);
+    });
+
+    it('fails closed when a write-capable agent has no bound slug prefixes', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: null,
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['private/*'],
+        }),
+      ).rejects.toThrow(/slug_prefix "private\/\*" is not under any.*bound_slug_prefixes/);
+    });
+
     it('refuses when a requested prefix has no bound parent', async () => {
       await seedClient('cursor', {
         bound_tools: ['put_page'],

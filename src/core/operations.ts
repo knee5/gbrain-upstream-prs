@@ -193,6 +193,27 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
 }
 
 /**
+ * Return whether every slug admitted by one delegated allow-list entry is
+ * also admitted by a registration-time binding.
+ *
+ * Exact entries contain only themselves. A trailing `/*` entry contains exact
+ * descendants and narrower trailing-`/*` namespaces, but not its own base
+ * slug. Keep this set-containment check separate from raw string prefixes:
+ * `inbox/client` must never contain the sibling namespace
+ * `inbox/client-evil/*`.
+ */
+export function isSlugGrantContained(requested: string, bound: string): boolean {
+  if (!requested.endsWith('/*')) {
+    return matchesSlugAllowList(requested, [bound]);
+  }
+  if (!bound.endsWith('/*')) return false;
+
+  const requestedBase = requested.slice(0, -2);
+  const boundBase = bound.slice(0, -2);
+  return requestedBase === boundBase || requestedBase.startsWith(`${boundBase}/`);
+}
+
+/**
  * Subagent slug-fence enforcement, shared by every mutating op a subagent
  * can reach (put_page, add_timeline_entry). FAIL-CLOSED: `viaSubagent=true`
  * enforces the check even if the dispatcher forgot to populate `subagentId`.
@@ -3299,14 +3320,16 @@ const submit_agent: Operation = {
       }
     }
     const requestedSlugPrefixes = (p.allowed_slug_prefixes as string[] | undefined) ?? boundSlugPrefixes ?? [];
-    if (boundSlugPrefixes !== null) {
-      for (const sp of requestedSlugPrefixes) {
-        if (!boundSlugPrefixes.some(bp => sp.startsWith(bp) || bp === sp)) {
-          throw new OperationError(
-            'permission_denied',
-            `submit_agent: slug_prefix "${sp}" is not under any of client ${clientId}'s bound_slug_prefixes.`,
-          );
-        }
+    for (const sp of requestedSlugPrefixes) {
+      if (
+        typeof sp !== 'string'
+        || !boundSlugPrefixes
+        || !boundSlugPrefixes.some(bp => isSlugGrantContained(sp, bp))
+      ) {
+        throw new OperationError(
+          'permission_denied',
+          `submit_agent: slug_prefix "${String(sp)}" is not under any of client ${clientId}'s bound_slug_prefixes.`,
+        );
       }
     }
 
