@@ -156,6 +156,22 @@ describe('MCP tool annotations', () => {
 
 describe('filterOperationsForScopes', () => {
   const remotelyExposed = operations.filter(op => !op.localOnly);
+  const destructiveOrLifecycle = [
+    'delete_page',
+    'restore_page',
+    'remove_tag',
+    'remove_link',
+    'revert_version',
+    'forget_fact',
+    'purge_deleted_pages',
+  ];
+  const remoteAdminDestructiveOrLifecycle = [
+    'delete_page',
+    'restore_page',
+    'remove_tag',
+    'remove_link',
+    'revert_version',
+  ];
 
   test('read token sees read tools and no write/admin tools', () => {
     const names = new Set(
@@ -175,8 +191,12 @@ describe('filterOperationsForScopes', () => {
     );
     expect(names.has('search')).toBe(true);
     expect(names.has('put_page')).toBe(true);
-    expect(names.has('delete_page')).toBe(false);
-    expect(names.has('restore_page')).toBe(false);
+    for (const name of destructiveOrLifecycle) {
+      expect(names.has(name), `write catalog must exclude destructive/lifecycle tool "${name}"`).toBe(false);
+    }
+    // The extractor may emit entity slugs that are not knowable at the input
+    // boundary, so it remains privileged until its outputs are namespace-fenced.
+    expect(names.has('extract_facts')).toBe(false);
     expect(names.has('get_health')).toBe(false);
     expect(names.has('submit_job')).toBe(false);
   });
@@ -187,8 +207,13 @@ describe('filterOperationsForScopes', () => {
     );
     expect(names.has('search')).toBe(true);
     expect(names.has('put_page')).toBe(true);
-    expect(names.has('delete_page')).toBe(true);
-    expect(names.has('restore_page')).toBe(true);
+    for (const name of remoteAdminDestructiveOrLifecycle) {
+      expect(names.has(name), `admin catalog must include remote admin tool "${name}"`).toBe(true);
+    }
+    expect(names.has('extract_facts')).toBe(true);
+    // localOnly operations remain absent even for admin.
+    expect(names.has('forget_fact')).toBe(false);
+    expect(names.has('purge_deleted_pages')).toBe(false);
     expect(names.has('get_health')).toBe(true);
     expect(names.has('submit_job')).toBe(true);
     for (const op of remotelyExposed.filter(op => op.scope === ('agent' as any))) {
@@ -199,6 +224,17 @@ describe('filterOperationsForScopes', () => {
   test('unknown or empty scopes advertise no tools', () => {
     expect(filterOperationsForScopes(remotelyExposed, []).length).toBe(0);
     expect(filterOperationsForScopes(remotelyExposed, ['bogus']).length).toBe(0);
+  });
+
+  test('destructive and uncontrolled-output operations carry their explicit privileged policy', () => {
+    const byName = new Map(operations.map(op => [op.name, op]));
+    for (const name of remoteAdminDestructiveOrLifecycle) {
+      expect(byName.get(name)?.scope, `${name} must require admin`).toBe('admin');
+      expect(byName.get(name)?.localOnly, `${name} remains remotely available to admin`).not.toBe(true);
+    }
+    expect(byName.get('forget_fact')?.scope).toBe('admin');
+    expect(byName.get('forget_fact')?.localOnly).toBe(true);
+    expect(byName.get('extract_facts')?.scope).toBe('admin');
   });
 });
 

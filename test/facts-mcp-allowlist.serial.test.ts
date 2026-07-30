@@ -2,9 +2,11 @@
  * v0.31 Phase 6 — MCP scope correctness on facts ops.
  *
  * Pins:
- *   - extract_facts → write scope
+ *   - extract_facts → admin scope (its model-selected entity slugs cannot yet
+ *     be namespace-fenced at the request boundary)
  *   - recall → read scope
- *   - forget_fact → write scope
+ *   - forget_fact → admin + localOnly (its durable path rewrites a local
+ *     Markdown mirror)
  *   - All three present in operations[]
  *   - param shapes match the documented contract
  *
@@ -30,10 +32,10 @@ afterAll(async () => {
 });
 
 describe('facts MCP ops registration + scope', () => {
-  test('extract_facts is registered with write scope', () => {
+  test('extract_facts is registered with admin scope', () => {
     const op = operations.find(o => o.name === 'extract_facts');
     expect(op).toBeDefined();
-    expect(op!.scope).toBe('write');
+    expect(op!.scope).toBe('admin');
     expect(op!.mutating).toBe(true);
     expect(op!.params.turn_text?.required).toBe(true);
     expect(op!.params.session_id).toBeDefined();
@@ -50,10 +52,11 @@ describe('facts MCP ops registration + scope', () => {
     expect(op!.params.session_id).toBeDefined();
   });
 
-  test('forget_fact is registered with write scope', () => {
+  test('forget_fact is registered as local admin-only', () => {
     const op = operations.find(o => o.name === 'forget_fact');
     expect(op).toBeDefined();
-    expect(op!.scope).toBe('write');
+    expect(op!.scope).toBe('admin');
+    expect(op!.localOnly).toBe(true);
     expect(op!.mutating).toBe(true);
     expect(op!.params.id?.required).toBe(true);
   });
@@ -62,7 +65,7 @@ describe('facts MCP ops registration + scope', () => {
 describe('forget_fact dispatch', () => {
   test('forget_fact errors with fact_not_found on unknown id', async () => {
     const r = await dispatchToolCall(engine, 'forget_fact', { id: 99999 }, {
-      remote: true, sourceId: 'default',
+      remote: false, sourceId: 'default',
     });
     expect(r.isError).toBe(true);
     const payload = JSON.parse(r.content[0].text);
@@ -75,12 +78,12 @@ describe('forget_fact dispatch', () => {
       { source_id: 'default' },
     );
     const r1 = await dispatchToolCall(engine, 'forget_fact', { id: inserted.id }, {
-      remote: true, sourceId: 'default',
+      remote: false, sourceId: 'default',
     });
     expect(r1.isError).toBeFalsy();
 
     const r2 = await dispatchToolCall(engine, 'forget_fact', { id: inserted.id }, {
-      remote: true, sourceId: 'default',
+      remote: false, sourceId: 'default',
     });
     expect(r2.isError).toBe(true);
     const payload = JSON.parse(r2.content[0].text);
@@ -95,7 +98,7 @@ describe('extract_facts dispatch (no API key)', () => {
   test('returns inserted=0 / duplicate=0 / superseded=0 when chat gateway unavailable', async () => {
     const r = await dispatchToolCall(engine, 'extract_facts', {
       turn_text: 'I am flying to Tokyo Tuesday.',
-    }, { remote: true, sourceId: 'default' });
+    }, { remote: false, sourceId: 'default' });
     expect(r.isError).toBeFalsy();
     const payload = JSON.parse(r.content[0].text);
     expect(payload.inserted).toBe(0);

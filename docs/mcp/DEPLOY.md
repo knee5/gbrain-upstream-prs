@@ -107,7 +107,9 @@ Register clients from the **`/admin` dashboard**:
 
 1. Click **Register client**.
 2. Enter a name (e.g. `perplexity`, `chatgpt`).
-3. Pick scopes: `read`, `write`, `admin` (checkboxes).
+3. Pick scopes: `read`, `write`, `admin` (checkboxes). If you select `write`,
+   enter at least one explicit slug-prefix grant, such as
+   `inbox/perplexity/*`; unbound routine writes fail closed.
 4. Pick grant type: `client_credentials` for machine-to-machine (Perplexity,
    Claude Desktop bearer mode) or `authorization_code` for browser-based
    clients with PKCE (ChatGPT).
@@ -121,11 +123,12 @@ Or from the CLI — faster for scripting:
 ```bash
 gbrain auth register-client perplexity \
   --grant-types client_credentials \
-  --scopes "read write"
+  --scopes "read write" \
+  --bound-slug-prefixes "inbox/perplexity/*"
 ```
 
 **v0.34 — source-scoped clients.** Multi-source brains can scope a client's
-write authority to one source and its read scope to a curated set with the
+write destination to one source and its read scope to a curated set with the
 new `--source` and `--federated-read` flags:
 
 ```bash
@@ -133,14 +136,18 @@ gbrain auth register-client dept-x-agent \
   --grant-types client_credentials \
   --scopes "read write" \
   --source dept-x \
-  --federated-read dept-x,shared,parent-canon
+  --federated-read dept-x,shared,parent-canon \
+  --bound-slug-prefixes "inbox/dept-x/*"
 ```
 
-`--source` controls the write authority — `put_page` / `add_link` / etc only
-land in `dept-x`. `--federated-read` controls the read axis independently;
-queries return rows from any of the listed sources. Omit both flags for the
-v0.33-compatible super-client shape. Pre-v0.34 clients are backfilled to
-`source_id='default'` on `gbrain upgrade`.
+`--source` controls which database source receives writes — `put_page` /
+`add_link` / etc land in `dept-x`. It does not grant slug authority. Every
+routine non-admin OAuth write that targets or references a page must also match
+an explicit registration-time `--bound-slug-prefixes` grant; an unbound client
+fails closed. `add_link` checks both endpoints, and `log_ingest` checks every
+entry in `pages_updated`. `--federated-read` controls the read axis
+independently; queries return rows from any of the listed sources. Pre-v0.34
+clients are backfilled to `source_id='default'` on `gbrain upgrade`.
 
 Host-repo wrappers can register programmatically:
 
@@ -150,6 +157,10 @@ await oauthProvider.registerClientManual(
   ['client_credentials'],
   'read write',
   [],  // redirect_uris, empty for CC
+  'default',
+  ['default'],
+  'client_secret_post',
+  { boundSlugPrefixes: ['inbox/perplexity/*'] },
 );
 ```
 
@@ -180,18 +191,25 @@ Your OAuth issuer URL becomes `https://your-brain.ngrok.app`. The MCP SDK's
 router exposes the spec-compliant discovery endpoint at
 `/.well-known/oauth-authorization-server`.
 
-### 4. Scopes and localOnly
+### 4. Scopes, namespaces, and localOnly
 
-Every operation is tagged `read | write | admin`. Four operations are
+Every operation is tagged `read | write | admin`. Nine operations are
 `localOnly` and rejected over HTTP regardless of scope: `sync_brain`,
-`file_upload`, `file_list`, `file_url`. Remote agents cannot reach local
-filesystem surface area.
+`file_upload`, `file_list`, `file_url`, `forget_fact`,
+`purge_deleted_pages`, `get_recent_transcripts`, `chronicle_backfill`, and
+`code_traversal_cache_clear`. Remote agents cannot reach those host-local
+surfaces.
 
 | Scope | What it allows |
 |-------|---------------|
 | `read` | `search`, `query`, `get_page`, `list_pages`, graph traversal |
-| `write` | `put_page`, `delete_page`, `add_link`, `add_timeline_entry` |
-| `admin` | Client management, token revocation, sweep, local-only ops |
+| `write` | Namespace-bound intake: `put_page`, `add_tag`, `add_link`, `add_timeline_entry`, `put_raw_data`, `log_ingest`, `ontology_propose`; `think` cannot persist remotely |
+| `admin` | Destructive/lifecycle controls (`delete_page`, `restore_page`, `remove_tag`, `remove_link`, `revert_version`), unrestricted slug writes, and model-selected `extract_facts` |
+
+`forget_fact` is both `admin` and `localOnly` because its durable path rewrites
+the source's Markdown facts fence. It must remain a local operator action until
+that mirror path is redesigned as remote-safe DB-only behavior. A write token
+never inherits deletion, rollback, or fact-forgetting authority.
 
 ## Legacy Bearer Token Setup
 

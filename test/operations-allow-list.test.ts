@@ -11,8 +11,9 @@
  *     anti-prompt-injection guarantee)
  *   - put_page rejects when viaSubagent=true but subagentId is missing
  *     (regression guard for FAIL-CLOSED behavior)
- *   - routine OAuth writers require a registration-time write namespace,
- *     while admin and trusted local callers retain operator behavior
+ *   - every routine slug-targeting OAuth write requires a registration-time
+ *     write namespace, while admin and trusted local callers retain operator
+ *     behavior
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -242,5 +243,150 @@ describe('put_page — OAuth write namespace', () => {
       },
     ) as { dry_run?: boolean };
     expect(result.dry_run).toBe(true);
+  });
+});
+
+describe('routine OAuth writes — namespace-bound invocation matrix', () => {
+  const oauthCtx = (
+    writeSlugPrefixes: string[] | undefined,
+    scopes = ['read', 'write'],
+  ) => makeCtx({
+    dryRun: true,
+    viaSubagent: false,
+    subagentId: undefined,
+    auth: {
+      token: 'test-token',
+      clientId: 'gbrain_cl_chatgpt',
+      scopes,
+      writeSlugPrefixes,
+    },
+  });
+
+  const cases: Array<{
+    name: string;
+    allowed: Record<string, unknown>;
+    outside: Record<string, unknown>;
+  }> = [
+    {
+      name: 'add_tag',
+      allowed: { slug: 'inbox/chatgpt/page-1', tag: 'captured' },
+      outside: { slug: 'people/alice-example', tag: 'captured' },
+    },
+    {
+      name: 'add_link',
+      allowed: {
+        from: 'inbox/chatgpt/page-1',
+        to: 'inbox/chatgpt/page-2',
+      },
+      // The target is deliberately outside: both endpoints must be owned.
+      outside: {
+        from: 'inbox/chatgpt/page-1',
+        to: 'people/alice-example',
+      },
+    },
+    {
+      name: 'add_timeline_entry',
+      allowed: {
+        slug: 'inbox/chatgpt/page-1',
+        date: '2026-07-30',
+        summary: 'Captured from ChatGPT',
+      },
+      outside: {
+        slug: 'people/alice-example',
+        date: '2026-07-30',
+        summary: 'Must not land',
+      },
+    },
+    {
+      name: 'put_raw_data',
+      allowed: {
+        slug: 'inbox/chatgpt/page-1',
+        source: 'test',
+        data: { ok: true },
+      },
+      outside: {
+        slug: 'people/alice-example',
+        source: 'test',
+        data: { ok: false },
+      },
+    },
+    {
+      name: 'log_ingest',
+      allowed: {
+        source_type: 'chatgpt',
+        source_ref: 'conversation-1',
+        pages_updated: ['inbox/chatgpt/page-1', 'inbox/chatgpt/page-2'],
+        summary: 'Captured two pages',
+      },
+      // Proves the handler checks every member, not only the first.
+      outside: {
+        source_type: 'chatgpt',
+        source_ref: 'conversation-1',
+        pages_updated: ['inbox/chatgpt/page-1', 'people/alice-example'],
+        summary: 'Must not claim a foreign page',
+      },
+    },
+    {
+      name: 'ontology_propose',
+      allowed: {
+        entity: 'inbox/chatgpt/page-1',
+        dimension: 'status',
+        value: 'captured',
+      },
+      outside: {
+        entity: 'people/alice-example',
+        dimension: 'status',
+        value: 'must-not-land',
+      },
+    },
+  ];
+
+  test('the matrix accounts for every routine write operation with slug side effects', () => {
+    const reviewed = new Set(['put_page', 'think', ...cases.map(c => c.name)]);
+    const writeOps = operations
+      .filter(op => op.scope === 'write')
+      .map(op => op.name)
+      .sort();
+    expect(writeOps).toEqual([...reviewed].sort());
+  });
+
+  for (const c of cases) {
+    test(`${c.name} ALLOWS an invocation fully inside the registered prefix`, async () => {
+      const result = await findOp(c.name).handler(
+        oauthCtx(['inbox/chatgpt/*']),
+        c.allowed,
+      ) as { dry_run?: boolean };
+      expect(result.dry_run).toBe(true);
+    });
+
+    test(`${c.name} REJECTS an invocation outside the registered prefix`, async () => {
+      await expect(findOp(c.name).handler(
+        oauthCtx(['inbox/chatgpt/*']),
+        c.outside,
+      )).rejects.toMatchObject({
+        code: 'permission_denied',
+      });
+    });
+
+    test(`${c.name} FAILS CLOSED when bound_slug_prefixes is absent`, async () => {
+      await expect(findOp(c.name).handler(
+        oauthCtx(undefined),
+        c.allowed,
+      )).rejects.toMatchObject({
+        code: 'permission_denied',
+      });
+    });
+  }
+
+  test('add_link also rejects an outside-prefix origin when the target is allowed', async () => {
+    await expect(findOp('add_link').handler(
+      oauthCtx(['inbox/chatgpt/*']),
+      {
+        from: 'people/alice-example',
+        to: 'inbox/chatgpt/page-2',
+      },
+    )).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
   });
 });

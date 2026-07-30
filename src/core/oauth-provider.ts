@@ -620,8 +620,8 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
       // (v60 applied but v61 didn't yet) also fall through cleanly.
       if (isUndefinedColumnError(err, 'bound_slug_prefixes')) {
         // Pre-binding schema: reads and identity continue to work, but
-        // writeSlugPrefixes stays undefined so put_page fails closed for
-        // non-admin OAuth callers.
+        // writeSlugPrefixes stays undefined so routine slug-targeting writes
+        // fail closed for non-admin OAuth callers.
         oauthRows = await this.sql`
           SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name,
                  c.source_id, c.federated_read

@@ -226,7 +226,7 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
 }
 
 /**
- * OAuth page-write namespace fence.
+ * OAuth slug-write namespace fence.
  *
  * Routine remote writers (`read write`, without `admin`) must carry an
  * explicit registration-time `bound_slug_prefixes` grant and the requested
@@ -339,10 +339,12 @@ export interface AuthInfo {
    */
   allowedSources?: string[];
   /**
-   * Slug-prefix globs this OAuth client may create or update through
-   * `put_page`. Sourced from `oauth_clients.bound_slug_prefixes` at
+   * Slug-prefix globs this OAuth client may mutate through routine write
+   * operations such as `put_page`, `add_tag`, `add_link`,
+   * `add_timeline_entry`, `put_raw_data`, `log_ingest`, and
+   * `ontology_propose`. Sourced from `oauth_clients.bound_slug_prefixes` at
    * token-verification time. A non-admin remote caller with no entries is
-   * denied page writes; absence never means "all slugs".
+   * denied slug-targeting writes; absence never means "all slugs".
    *
    * The same persisted binding also constrains `submit_agent` child writes.
    * Reusing one registration-time boundary keeps direct and delegated writes
@@ -2141,6 +2143,7 @@ const add_tag: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_tag');
     if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug: p.slug, tag: p.tag };
     // v0.31.8 (D7): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
@@ -2152,13 +2155,13 @@ const add_tag: Operation = {
 
 const remove_tag: Operation = {
   name: 'remove_tag',
-  description: 'Remove tag from page',
+  description: 'Admin-only: remove a tag from a page',
   params: {
     slug: { type: 'string', required: true },
     tag: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'remove_tag', slug: p.slug, tag: p.tag };
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
@@ -2213,6 +2216,11 @@ const add_link: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    // Both endpoints affect graph topology and ranking. A routine OAuth
+    // writer must own both namespaces; fencing only `from` would let an
+    // intake client poison arbitrary targets through backlinks.
+    enforceOAuthWriteSlugFence(ctx, p.from as string, 'add_link');
+    enforceOAuthWriteSlugFence(ctx, p.to as string, 'add_link');
     if (ctx.dryRun) return { dry_run: true, action: 'add_link', from: p.from, to: p.to };
     // v114 (#1941): default omitted provenance to 'manual' (NOT the engine's
     // 'markdown' default) so hand/tool-created CLI edges are honestly manual,
@@ -2243,7 +2251,7 @@ const add_link: Operation = {
 
 const remove_link: Operation = {
   name: 'remove_link',
-  description: 'Remove link between pages',
+  description: 'Admin-only: remove a link between pages',
   params: {
     from: { type: 'string', required: true },
     to: { type: 'string', required: true },
@@ -2251,7 +2259,7 @@ const remove_link: Operation = {
     link_source: { type: 'string', description: 'Only remove edges of this provenance (e.g. citation-graph); omit = any provenance' },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'remove_link', from: p.from, to: p.to };
     const linkOpts = ctx.sourceId
@@ -2380,6 +2388,7 @@ const add_timeline_entry: Operation = {
     // confined to the same namespace/allow-list as page writes. Runs before
     // the dry-run short-circuit so preview calls surface the same rejection.
     enforceSubagentSlugFence(ctx, p.slug as string, 'add_timeline_entry');
+    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_timeline_entry');
     if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug: p.slug };
     const date = p.date as string;
     // Reject anything that isn't a strict YYYY-MM-DD with year 1900-2199 and
@@ -2768,13 +2777,13 @@ const get_versions: Operation = {
 
 const revert_version: Operation = {
   name: 'revert_version',
-  description: 'Revert page to a previous version',
+  description: 'Admin-only: revert a page to a previous version',
   params: {
     slug: { type: 'string', required: true },
     version_id: { type: 'number', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'revert_version', slug: p.slug, version_id: p.version_id };
     // v0.31.8 (D7): thread ctx.sourceId so multi-source brains revert the
@@ -2829,6 +2838,7 @@ const put_raw_data: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    enforceOAuthWriteSlugFence(ctx, p.slug as string, 'put_raw_data');
     if (ctx.dryRun) return { dry_run: true, action: 'put_raw_data', slug: p.slug, source: p.source };
     // v0.31.8 (D7 + D21): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
@@ -2898,6 +2908,12 @@ const log_ingest: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    // pages_updated is part of the durable ingestion audit trail. Fence every
+    // referenced page so a namespace-bound client cannot claim arbitrary
+    // pages were updated.
+    for (const slug of p.pages_updated as string[]) {
+      enforceOAuthWriteSlugFence(ctx, slug, 'log_ingest');
+    }
     if (ctx.dryRun) return { dry_run: true, action: 'log_ingest' };
     await ctx.engine.logIngest({
       // Thread ctx.sourceId (same pattern as get_chunks/get_page above): on a
@@ -3178,7 +3194,7 @@ const submit_agent: Operation = {
     prompt: { type: 'string', required: true, description: 'User prompt for the agent' },
     model: { type: 'string', description: 'provider:model string (defaults to models.tier.subagent)' },
     allowed_tools: { type: 'array', description: 'Subset of bound_tools the agent may invoke', items: { type: 'string' } },
-    allowed_slug_prefixes: { type: 'array', description: 'Subset of bound_slug_prefixes for put_page writes', items: { type: 'string' } },
+    allowed_slug_prefixes: { type: 'array', description: 'Subset of bound_slug_prefixes for delegated slug writes', items: { type: 'string' } },
     max_turns: { type: 'number', description: 'Max LLM turns (default 20, hard cap 100)' },
     queue: { type: 'string', description: 'Queue name (default "default")' },
   },
@@ -4176,7 +4192,11 @@ const extract_facts: Operation = {
     visibility: { type: 'string', description: 'Default visibility for extracted facts. private (default) | world.' },
   },
   mutating: true,
-  scope: 'write',
+  // The extractor chooses entity slugs after the request crosses the OAuth
+  // boundary, so an input-only prefix check cannot prove the output stays in
+  // namespace. Keep this privileged until the extraction pipeline validates
+  // every emitted entity slug against the caller's grant.
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'extract_facts' };
     const { isFactsExtractionEnabled } = await import('./facts/extract.ts');
@@ -4335,13 +4355,16 @@ const recall: Operation = {
 
 const forget_fact: Operation = {
   name: 'forget_fact',
-  description: 'v0.32.2: forget a fact. Rewrites the page\'s `## Facts` fence to strike through the row and set valid_until=today (the DB\'s expired_at derives via valid_until + now() on the next reconcile so the forget survives `gbrain rebuild`). Falls back to legacy DB-only expire for pre-v51 / thin-client rows. Idempotent on already-expired or unknown ids.',
+  description: 'v0.32.2: local admin-only fact deletion. Rewrites the page\'s `## Facts` fence to strike through the row and set valid_until=today (the DB\'s expired_at derives via valid_until + now() on the next reconcile so the forget survives `gbrain rebuild`). Falls back to legacy DB-only expire for pre-v51 / thin-client rows. Idempotent on already-expired or unknown ids.',
   params: {
     id: { type: 'number', required: true, description: 'Fact id to forget.' },
     reason: { type: 'string', required: false, description: 'Optional reason; written to the fence row\'s context cell as "forgotten: <reason>". Default: "forgotten".' },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
+  // The durable path rewrites sources.local_path. Until the mirror is
+  // redesigned as a remote-safe DB-only operation, never expose it over HTTP.
+  localOnly: true,
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'forget_fact', id: p.id };
     const id = p.id as number;
@@ -5523,6 +5546,15 @@ const ontology_propose: Operation = {
     visibility: { type: 'string', enum: ['private', 'world'], description: 'Default private.' },
   },
   handler: async (ctx, p) => {
+    enforceOAuthWriteSlugFence(ctx, String(p.entity), 'ontology_propose');
+    if (ctx.dryRun) {
+      return {
+        dry_run: true,
+        action: 'ontology_propose',
+        entity: p.entity,
+        dimension: p.dimension,
+      };
+    }
     return ctx.engine.mergeOntologyFact({
       entitySlug: String(p.entity),
       dimension: String(p.dimension),

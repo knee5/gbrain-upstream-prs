@@ -36,9 +36,11 @@ gbrain auth register-client chatgpt \
 Save the printed `client_id`. A PKCE public client has no client secret.
 
 The `read write` grant is intentional: a trusted ChatGPT connector is both a
-retrieval and intake surface, so it must be able to call `put_page`.
-`--bound-slug-prefixes "inbox/chatgpt/*"` confines those creates and updates to
-ChatGPT's intake lane. Missing or mismatched write-prefix metadata is denied.
+retrieval and intake surface. `--bound-slug-prefixes "inbox/chatgpt/*"`
+confines every routine slug-targeting write to ChatGPT's intake lane. This
+includes `put_page`, tags, both endpoints of new links, timeline entries, raw
+data, every page named by an ingest-log entry, and ontology observations.
+Missing or mismatched write-prefix metadata is denied.
 Use a comma-separated list when a connector needs more than one intake lane.
 Do not reuse a read-only dashboard/export client for ChatGPT, and do not add
 `admin`. Anonymous dynamic registration and generic `register-client` calls
@@ -86,19 +88,24 @@ calls show up in the admin dashboard's live SSE feed in real time.
 ## Scopes
 
 ChatGPT clients can request any combination of `read`, `write`, `admin`. The
-scopes granted at consent time are enforced on every tool call. Four
-operations are `localOnly` and rejected over HTTP regardless of scope:
-`sync_brain`, `file_upload`, `file_list`, `file_url`. The HTTP server fails
-closed for any attempt to reach local filesystem surface area.
+scopes granted at consent time are enforced on every tool call. `localOnly`
+operations are rejected over HTTP regardless of scope; this includes the
+filesystem tools plus `forget_fact`, whose durable path rewrites the local
+Markdown mirror. The HTTP server fails closed for attempts to reach these
+host-local surfaces.
 
 Required trusted-connector scope: `read write`. Leave `admin` for your local
 CLI and the admin dashboard. A deliberately read-only public consumer can use
 `read`, but it is not a complete GBrain intake surface.
 
-Routine OAuth `write` tokens may create or update pages only beneath their
-registered `bound_slug_prefixes`. They cannot call `delete_page` or
-`restore_page`; both are lifecycle operations and require `admin`. This lets
-ChatGPT record new information without giving it deletion or recovery powers.
+Routine OAuth `write` tokens may mutate or reference pages only beneath their
+registered `bound_slug_prefixes`. They cannot call `delete_page`,
+`restore_page`, `remove_tag`, `remove_link`, or `revert_version`; those
+destructive/lifecycle operations require `admin`. `extract_facts` is also
+admin-only because the model selects its output entity slugs after the request
+crosses the namespace boundary. `forget_fact` is local admin-only. This lets
+ChatGPT record and enrich new information without giving it deletion, rollback,
+or unconstrained model-write powers.
 
 ## Troubleshooting
 
@@ -118,7 +125,7 @@ ChatGPT uses `authorization_code`, which the MCP SDK supports natively.
 If you see this error, verify the client was registered with
 `--grant-types authorization_code` and not `client_credentials`.
 
-**"`put_page` requires an OAuth write namespace"**
+**"`<tool>` requires an OAuth write namespace"**
 Re-register the connector with `--bound-slug-prefixes`, complete a fresh OAuth
 authorization, and confirm `whoami` reports the expected
 `write_slug_prefixes`. Existing access tokens do not acquire newly registered

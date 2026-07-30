@@ -645,7 +645,7 @@ Usage:
      --bound-tools <tool1,tool2>                           Bind submit_agent to an allow-list of tools
      --bound-source <id>                                   Bind submit_agent jobs to a source id
      --bound-brain <id>                                    Bind submit_agent jobs to a brain id
-     --bound-slug-prefixes <glob1,glob2>                   Bind OAuth put_page and submit_agent writes
+     --bound-slug-prefixes <glob1,glob2>                   Bind routine OAuth slug writes and submit_agent writes
                                                           (for example: inbox/chatgpt/*)
      --bound-max-concurrent <n>                            Bound submit_agent concurrency (default: 1)
      --budget-usd-per-day <usd>                            Bound submit_agent daily spend cap

@@ -351,7 +351,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     expect(body).not.toContain('insufficient_scope');
   }, 15_000);
 
-  test('write-scoped OAuth token is fenced to its registered page namespace', async () => {
+  test('write-scoped OAuth token is fenced to its registered slug namespace', async () => {
     const { access_token } = await mintToken('read write');
 
     const identity = await mcpCall(access_token, 'tools/call', {
@@ -390,22 +390,42 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     const writeNames = new Set(writeTools.map(tool => tool.name));
     expect(writeNames.has('search')).toBe(true);
     expect(writeNames.has('put_page')).toBe(true);
-    expect(writeNames.has('delete_page')).toBe(false);
-    expect(writeNames.has('restore_page')).toBe(false);
+    for (const name of [
+      'delete_page',
+      'restore_page',
+      'remove_tag',
+      'remove_link',
+      'revert_version',
+      'forget_fact',
+      'purge_deleted_pages',
+      'extract_facts',
+    ]) {
+      expect(writeNames.has(name), `write catalog must exclude privileged tool "${name}"`).toBe(false);
+    }
     expect(writeNames.has('get_health')).toBe(false);
     expect(writeNames.has('submit_job')).toBe(false);
 
     const adminNames = new Set(adminTools.map(tool => tool.name));
     expect(adminNames.has('search')).toBe(true);
     expect(adminNames.has('put_page')).toBe(true);
-    expect(adminNames.has('delete_page')).toBe(true);
-    expect(adminNames.has('restore_page')).toBe(true);
+    for (const name of [
+      'delete_page',
+      'restore_page',
+      'remove_tag',
+      'remove_link',
+      'revert_version',
+      'extract_facts',
+    ]) {
+      expect(adminNames.has(name), `admin catalog must include remote admin tool "${name}"`).toBe(true);
+    }
     expect(adminNames.has('get_health')).toBe(true);
     expect(adminNames.has('submit_job')).toBe(true);
 
     // localOnly tools never appear even when their declared scope is satisfied.
     expect(adminNames.has('sync_brain')).toBe(false);
     expect(adminNames.has('file_upload')).toBe(false);
+    expect(adminNames.has('forget_fact')).toBe(false);
+    expect(adminNames.has('purge_deleted_pages')).toBe(false);
   }, 15_000);
 
   test('read-token catalog carries complete MCP annotations', async () => {
@@ -653,7 +673,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     try {
       await sql`
         INSERT INTO oauth_tokens (token_hash, token_type, client_id, scopes, expires_at)
-        VALUES (${tokenHash}, ${'access'}, ${publicClientId!}, ${sql.array(['read'])}, ${Math.floor(Date.now() / 1000) + 3600})
+        VALUES (${tokenHash}, ${'access'}, ${publicClientId!}, ${['read']}::text[], ${Math.floor(Date.now() / 1000) + 3600})
       `;
     } finally {
       await sql.end();
