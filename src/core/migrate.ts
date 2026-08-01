@@ -5724,6 +5724,33 @@ export const MIGRATIONS: Migration[] = [
         ON take_proposals (source_id, page_slug, content_hash, prompt_version, md5(claim_text));
     `,
   },
+  {
+    version: 126,
+    name: 'legacy_cycle_subagent_trust_marker',
+    // The trusted_workspace marker was added after durable dream-cycle jobs
+    // already existed. A worker restarted on the new handler would otherwise
+    // reclassify those bounded, internally submitted jobs as ordinary remote
+    // agents and silently skip the cycle's trusted-only enrichment hooks.
+    //
+    // This one-time repair is deliberately narrower than a handler fallback:
+    // it touches only non-terminal, protected subagent rows that predate the
+    // marker, carry a non-empty write namespace, and have no OAuth owner. New
+    // submit_agent rows always carry __owner_client_id and remain untrusted.
+    // Explicit markers are preserved. The update is idempotent and safe when
+    // the queue is empty.
+    idempotent: true,
+    sql: `
+      UPDATE minion_jobs
+         SET data = jsonb_set(data, '{trusted_workspace}', 'true'::jsonb, true),
+             updated_at = now()
+       WHERE name = 'subagent'
+         AND status IN ('waiting', 'active', 'delayed', 'waiting-children', 'paused')
+         AND jsonb_typeof(data->'allowed_slug_prefixes') = 'array'
+         AND jsonb_array_length(data->'allowed_slug_prefixes') > 0
+         AND NOT (data ? 'trusted_workspace')
+         AND NOT (data ? '__owner_client_id');
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

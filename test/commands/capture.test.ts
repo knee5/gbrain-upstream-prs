@@ -72,6 +72,18 @@ describe('capture — defaultSlug helper', () => {
     })).toMatch(/^inbox\/chatgpt-mobile\/2026-07-30-[a-f0-9]{8}$/);
   });
 
+  test('thin OAuth client accepts a legacy trailing-slash descendant lane', () => {
+    const generated = __testing.defaultSlug(
+      'legacy mobile capture',
+      new Date('2026-07-30T12:00:00Z'),
+    );
+    expect(__testing.resolveThinClientDefaultSlug(generated, {
+      transport: 'oauth',
+      scopes: ['read', 'write'],
+      write_slug_prefixes: ['wiki/'],
+    })).toMatch(/^wiki\/2026-07-30-[a-f0-9]{8}$/);
+  });
+
   test('thin OAuth admin preserves the global generated default', () => {
     const generated = 'life/diary/2026-07-30-12345678';
     expect(__testing.resolveThinClientDefaultSlug(generated, {

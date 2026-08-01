@@ -168,7 +168,8 @@ function defaultSlug(content: string, now: Date = new Date(), type?: string): st
  * client to write to the global inbox.
  *
  * Exact-only grants cannot synthesize a child. Those clients must supply
- * --slug explicitly (or be re-registered with a trailing /* namespace).
+ * --slug explicitly (or be re-registered with a descendant namespace using
+ * either the current trailing /* form or the legacy trailing / form).
  */
 function resolveThinClientDefaultSlug(
   generatedSlug: string,
@@ -198,9 +199,9 @@ function resolveThinClientDefaultSlug(
     throw new Error('remote whoami did not return a valid write_slug_prefixes list');
   }
 
-  const wildcard = (record.write_slug_prefixes as string[])
-    .find(prefix => prefix.endsWith('/*'));
-  if (!wildcard) {
+  const namespace = (record.write_slug_prefixes as string[])
+    .find(prefix => prefix.endsWith('/*') || prefix.endsWith('/'));
+  if (!namespace) {
     throw new Error(
       'thin-client OAuth grant is exact-only; pass --slug with an allowed exact slug or re-register with a trailing /* namespace',
     );
@@ -210,7 +211,10 @@ function resolveThinClientDefaultSlug(
   if (!leaf) {
     throw new Error(`generated capture slug '${generatedSlug}' has no page-name segment`);
   }
-  return `${wildcard.slice(0, -2)}/${leaf}`;
+  const namespaceRoot = namespace.endsWith('/*')
+    ? namespace.slice(0, -2)
+    : namespace.slice(0, -1);
+  return `${namespaceRoot}/${leaf}`;
 }
 
 /**
