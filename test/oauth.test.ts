@@ -1699,6 +1699,26 @@ describe('v0.41.3 DCR validator (T5)', () => {
 });
 
 describe('#1353 DCR default-grant hardening', () => {
+  test('DCR rejects elevated scopes that have no operator-supplied bindings', async () => {
+    for (const scope of ['read write', 'admin', 'agent']) {
+      await expect(
+        provider.clientsStore.registerClient!({
+          client_name: `unbound-${scope.replace(/ /g, '-')}`,
+          grant_types: ['authorization_code'],
+          scope,
+          redirect_uris: ['https://example.test/cb'],
+          token_endpoint_auth_method: 'none',
+        } as any),
+      ).rejects.toThrow(/dynamic client registration is read-only/);
+    }
+
+    const rows = await sql`
+      SELECT client_id FROM oauth_clients
+      WHERE client_name LIKE ${'unbound-%'}
+    `;
+    expect(rows).toHaveLength(0);
+  });
+
   test('DCR rejects explicit client_credentials by default', async () => {
     await expect(
       provider.clientsStore.registerClient!({

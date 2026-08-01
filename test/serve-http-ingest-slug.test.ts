@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildOAuthIngestCaptureJobData,
+  buildOAuthIngestIdempotencyKey,
   resolveOAuthIngestSlug,
 } from '../src/commands/serve-http.ts';
 import type { AuthInfo } from '../src/core/operations.ts';
@@ -147,5 +148,41 @@ describe('buildOAuthIngestCaptureJobData', () => {
     );
     expect(data.target_source_id).toBe('default');
     expect(data.oauth_ingest_payload_version).toBe(2);
+  });
+});
+
+describe('buildOAuthIngestIdempotencyKey', () => {
+  test('same content and slug deduplicate for the same authenticated lane', () => {
+    const client = auth({ sourceId: 'chatgpt-mobile' });
+    const first = buildOAuthIngestIdempotencyKey(
+      client,
+      'chatgpt-mobile',
+      'inbox/test-client/capture-a',
+      HASH,
+    );
+    const retry = buildOAuthIngestIdempotencyKey(
+      client,
+      'chatgpt-mobile',
+      'inbox/test-client/capture-a',
+      HASH,
+    );
+    expect(retry).toBe(first);
+  });
+
+  test('identical content sent to a different allowed slug is a different job', () => {
+    const client = auth({ sourceId: 'chatgpt-mobile' });
+    const first = buildOAuthIngestIdempotencyKey(
+      client,
+      'chatgpt-mobile',
+      'inbox/test-client/capture-a',
+      HASH,
+    );
+    const second = buildOAuthIngestIdempotencyKey(
+      client,
+      'chatgpt-mobile',
+      'inbox/test-client/capture-b',
+      HASH,
+    );
+    expect(second).not.toBe(first);
   });
 });

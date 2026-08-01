@@ -43,8 +43,9 @@ data, every page named by an ingest-log entry, and ontology observations.
 Missing or mismatched write-prefix metadata is denied.
 Use a comma-separated list when a connector needs more than one intake lane.
 Do not reuse a read-only dashboard/export client for ChatGPT, and do not add
-`admin`. Anonymous dynamic registration and generic `register-client` calls
-remain read-only unless the operator explicitly grants `write`.
+`admin`. Anonymous dynamic registration is read-only because it has no trusted
+place to attach a write namespace. Grant `write` only through the operator-
+controlled `register-client` path with explicit `--bound-slug-prefixes`.
 
 Host-repo wrappers can register programmatically:
 

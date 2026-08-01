@@ -166,8 +166,11 @@ await oauthProvider.registerClientManual(
 );
 ```
 
-For self-service client registration (Dynamic Client Registration, RFC 7591),
-start the server with `--enable-dcr`. DCR is off by default.
+For self-service read-only client registration (Dynamic Client Registration,
+RFC 7591), start the server with `--enable-dcr`. DCR is off by default and
+rejects `write`, `admin`, `agent`, and other elevated scopes because those
+require operator-supplied namespace/tool/source bindings. Pre-register elevated
+clients with the CLI or admin API instead.
 
 ### 3. Expose the server
 

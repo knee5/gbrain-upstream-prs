@@ -11,13 +11,10 @@
  *     from caller-controlled event provenance. Missing or stale target-source
  *     state fails closed.
  *   - Auto-link runs at the put_page operation layer, which we deliberately
- *     bypass here. The handler calls importFromContent directly. v1 path: the
- *     webhook OAuth gate is the trust boundary; the handler trusts the
- *     event-shape but treats content as user-authored markdown.
- *   - Auto-link integration with the untrusted_payload tag is a v2
- *     improvement (would require routing through the put_page op AND
- *     extending OperationContext with the trust tag). See TODOs in the
- *     plan.
+ *     bypass here. importFromContent still receives `remote: true` for an
+ *     untrusted webhook so gate-owned markers are stripped and import-time
+ *     code-reference edges are disabled. The content lands as a page without
+ *     acquiring a second graph-write surface.
  *
  * Slug resolution (in order):
  *   1. `job.data.slug` if caller provided one
@@ -86,9 +83,9 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
       slug = defaultSlugForEvent(event);
     }
 
-    // Untrusted-payload posture. For v1, the flag is propagated for audit
-    // but not enforced at this layer (see file header). Future v2 wiring
-    // through put_page will use this flag.
+    // Untrusted-payload posture. The flag is preserved for audit and passed
+    // into importFromContent so page-content trust gates stay active even
+    // though this worker bypasses the put_page operation wrapper.
     const untrustedPayload = event.untrusted_payload === true;
 
     // For text-typed events, content is the inline markdown/text. For
@@ -183,6 +180,7 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
       source_kind: event.source_kind,
       source_uri: event.source_uri,
       ingested_via: 'ingest_capture',
+      remote: untrustedPayload,
     });
 
     return {

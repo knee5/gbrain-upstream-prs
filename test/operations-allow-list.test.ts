@@ -266,6 +266,8 @@ describe('put_page — OAuth write namespace', () => {
         remote: true,
         auth: undefined,
         transport: undefined,
+        viaSubagent: false,
+        subagentId: undefined,
       }),
       {
         slug: 'inbox/chatgpt/page-1',

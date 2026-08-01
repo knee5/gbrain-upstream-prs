@@ -248,6 +248,22 @@ export function buildOAuthIngestCaptureJobData(
   };
 }
 
+/**
+ * Queue identity for OAuth webhook ingest.
+ *
+ * The resolved page slug is part of the logical write. Identical content sent
+ * to two allowed slugs must produce two jobs; otherwise the queue returns the
+ * first job while the HTTP response falsely reports the second slug.
+ */
+export function buildOAuthIngestIdempotencyKey(
+  authInfo: AuthInfo,
+  targetSourceId: string,
+  resolvedSlug: string,
+  contentHash: string,
+): string {
+  return `ingest:webhook:${authInfo.clientId}:${targetSourceId}:${resolvedSlug}:${contentHash}`;
+}
+
 export type ProbeHealthResult =
   | { ok: true; status: 200; body: { status: 'ok'; version: string; engine: string; [k: string]: unknown } }
   | { ok: false; status: 503; body: { error: 'service_unavailable'; error_description: string } };
@@ -2329,15 +2345,18 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           'ingest_capture',
           jobData,
           {
-            // Idempotency: same content from the same client within the
-            // queue's lifetime is a single job. Different content gets
-            // different jobs. Include the authenticated target source so a
-            // later client rescope cannot dedup against a job accepted under
-            // the client's former source grant. Daemon-side dedup catches the
-            // 24h window;
+            // Idempotency: the logical write includes content, authenticated
+            // client/source, and the resolved target slug. Include all four so
+            // identical content sent to different allowed pages never returns
+            // an older job whose payload points somewhere else. Daemon-side
+            // dedup catches the 24h window;
             // the queue-level idempotency catches simultaneous retries.
-            idempotency_key:
-              `ingest:webhook:${authInfo.clientId}:${jobData.target_source_id}:${contentHash}`,
+            idempotency_key: buildOAuthIngestIdempotencyKey(
+              authInfo,
+              jobData.target_source_id,
+              resolvedSlug,
+              contentHash,
+            ),
             // Cap waiting jobs from a single client so a runaway integration
             // can't fill the queue.
             maxWaiting: 50,

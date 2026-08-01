@@ -143,6 +143,37 @@ describe('ingest_capture handler — validation + routing', () => {
     expect(result.untrusted_payload).toBe(true);
   });
 
+  test('untrusted payload keeps import-time marker and code-link gates enabled', async () => {
+    await engine.putPage('src-core-operations-ts', {
+      type: 'code',
+      title: 'operations.ts',
+      compiled_truth: 'code target',
+    });
+    const content = [
+      '---',
+      'title: Remote capture',
+      'quarantine:',
+      '  reason: forged-by-caller',
+      '---',
+      '',
+      'See src/core/operations.ts:1043.',
+    ].join('\n');
+    const handler = makeIngestCaptureHandler(engine);
+    const ev = makeEvent({ content, untrusted_payload: true });
+    const slug = 'inbox/untrusted-import-gates';
+    const result = await handler(makeJob({
+      event: ev,
+      slug,
+      target_source_id: 'default',
+      oauth_ingest_payload_version: 2,
+    }));
+    expect(result.status).toBe('imported');
+
+    const page = await engine.getPage(slug, { sourceId: 'default' });
+    expect(page?.frontmatter?.quarantine).toBeUndefined();
+    expect(await engine.getLinks(slug, { sourceId: 'default' })).toHaveLength(0);
+  });
+
   test('trusted (default) payload round-trips as false', async () => {
     const handler = makeIngestCaptureHandler(engine);
     const ev = makeEvent({ content: 'trusted' });

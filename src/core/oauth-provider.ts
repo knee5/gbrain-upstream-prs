@@ -255,7 +255,23 @@ class GBrainClientsStore implements OAuthRegisteredClientsStore {
     // path is reachable by any unauthenticated network caller when --enable-dcr
     // is on, so this is the security-relevant gate (manual CLI registration
     // is operator-trusted).
-    assertAllowedScopes(parseScopeString(client.scope));
+    const requestedScopes = parseScopeString(client.scope);
+    assertAllowedScopes(requestedScopes);
+
+    // Dynamic registration is an unauthenticated entry point and has no
+    // operator-controlled place to attach the bindings required by elevated
+    // scopes (write namespaces, agent tool/source grants, or admin policy).
+    // Registering one of those scopes anyway produces a credential that is
+    // either unusable or dangerously under-specified. Keep DCR read-only;
+    // trusted clients that need write/admin/agent access are pre-registered
+    // through the CLI or admin API with explicit bindings.
+    const unboundScopes = requestedScopes.filter(scope => scope !== 'read');
+    if (unboundScopes.length > 0) {
+      throw new InvalidClientMetadataError(
+        `dynamic client registration is read-only; scope(s) ${unboundScopes.join(', ')} ` +
+        'require operator registration with explicit bindings via the gbrain CLI or admin API.',
+      );
+    }
 
     // v0.41.3 (T5): validate token_endpoint_auth_method on the DCR path so
     // `--enable-dcr` is not the looser entry point. CLI and admin paths gate
