@@ -78,6 +78,50 @@ describe('v0.29 E2E — setEmotionalWeightBatch is multi-source safe', () => {
     expect(byid['src-b']).toBeCloseTo(0.20, 5);
   });
 
+  test('identical weights are true no-ops and mixed batches count only changes', async () => {
+    const first = await engine.setEmotionalWeightBatch([
+      { slug: 'shared/page', source_id: 'default', weight: 0.31 },
+      { slug: 'shared/page', source_id: 'src-b', weight: 0.41 },
+    ]);
+    expect(first).toBe(2);
+
+    const before = await engine.executeRaw<{
+      source_id: string;
+      salience_touched_at: string;
+    }>(
+      `SELECT source_id, salience_touched_at::text AS salience_touched_at
+         FROM pages
+        WHERE slug = 'shared/page'
+        ORDER BY source_id`,
+    );
+
+    const mixed = await engine.setEmotionalWeightBatch([
+      { slug: 'shared/page', source_id: 'default', weight: 0.31 },
+      { slug: 'shared/page', source_id: 'src-b', weight: 0.51 },
+    ]);
+    expect(mixed).toBe(1);
+
+    const afterMixed = await engine.executeRaw<{
+      source_id: string;
+      emotional_weight: number;
+      salience_touched_at: string;
+    }>(
+      `SELECT source_id, emotional_weight, salience_touched_at::text AS salience_touched_at
+         FROM pages
+        WHERE slug = 'shared/page'
+        ORDER BY source_id`,
+    );
+    expect(afterMixed[0].source_id).toBe('default');
+    expect(afterMixed[0].salience_touched_at).toBe(before[0].salience_touched_at);
+    expect(Number(afterMixed[1].emotional_weight)).toBeCloseTo(0.51, 5);
+
+    const allNoOp = await engine.setEmotionalWeightBatch([
+      { slug: 'shared/page', source_id: 'default', weight: 0.31 },
+      { slug: 'shared/page', source_id: 'src-b', weight: 0.51 },
+    ]);
+    expect(allNoOp).toBe(0);
+  });
+
   test('non-existent (slug, source_id) tuple is silently skipped (no error)', async () => {
     const updated = await engine.setEmotionalWeightBatch([
       { slug: 'shared/page',   source_id: 'default',   weight: 0.50 },  // exists

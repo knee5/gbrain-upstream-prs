@@ -67,6 +67,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
   ],
   // postgres.js bind paths + JSONB shapes + parity vs PGLite.
   "src/core/postgres-engine.ts": [
+    "test/e2e/emotional-weight-noop-postgres.test.ts",
     "test/e2e/postgres-bootstrap.test.ts",
     "test/e2e/postgres-jsonb.test.ts",
     "test/e2e/jsonb-roundtrip.test.ts",
@@ -77,6 +78,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
   ],
   // PGLite bootstrap path + parity guard.
   "src/core/pglite-engine.ts": [
+    "test/e2e/multi-source-emotional-weight-pglite.test.ts",
     "test/e2e/postgres-bootstrap.test.ts",
     "test/e2e/engine-parity.test.ts",
     "test/e2e/schema-drift.test.ts",
