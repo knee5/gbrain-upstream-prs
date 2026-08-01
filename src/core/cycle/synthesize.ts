@@ -613,6 +613,7 @@ export async function runPhaseSynthesize(
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
+          trusted_workspace: true,
           // #1586: scope every child tool call to the cycle's resolved source
           // so put_page writes land there instead of the hardcoded 'default'.
           ...(opts.sourceId ? { source_id: opts.sourceId } : {}),

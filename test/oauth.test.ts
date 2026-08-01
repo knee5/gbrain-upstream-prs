@@ -141,7 +141,7 @@ describe('client registration', () => {
   });
 
   test('registerClientManual persists submit_agent bindings when supplied', async () => {
-    const { clientId } = await provider.registerClientManual(
+    const { clientId, clientSecret } = await provider.registerClientManual(
       'bound-agent', ['client_credentials'], 'read agent', [], 'default', undefined, undefined, {
         boundTools: ['search', 'get_page'],
         boundSourceId: 'dept-x',
@@ -163,6 +163,40 @@ describe('client registration', () => {
     expect(rows[0].bound_slug_prefixes).toEqual(['wiki/agents/bound-agent/']);
     expect(Number(rows[0].bound_max_concurrent)).toBe(2);
     expect(rows[0].budget).toBe('7.50');
+
+    const tokens = await provider.exchangeClientCredentials(
+      clientId,
+      clientSecret!,
+      'read agent',
+    );
+    const authInfo = await provider.verifyAccessToken(tokens.access_token) as CoreAuthInfo;
+    expect(authInfo.writeSlugPrefixes).toEqual(['wiki/agents/bound-agent/']);
+  });
+
+  test('registerClientManual persists a routine-write namespace without agent bindings', async () => {
+    const { clientId, clientSecret } = await provider.registerClientManual(
+      'dashboard-write-client',
+      ['client_credentials'],
+      'read write',
+      [],
+      'default',
+      undefined,
+      undefined,
+      { boundSlugPrefixes: ['inbox/dashboard/*'] },
+    );
+
+    const rows = await sql`
+      SELECT bound_slug_prefixes FROM oauth_clients WHERE client_id = ${clientId}
+    `;
+    expect(rows[0].bound_slug_prefixes).toEqual(['inbox/dashboard/*']);
+
+    const tokens = await provider.exchangeClientCredentials(
+      clientId,
+      clientSecret!,
+      'read write',
+    );
+    const authInfo = await provider.verifyAccessToken(tokens.access_token) as CoreAuthInfo;
+    expect(authInfo.writeSlugPrefixes).toEqual(['inbox/dashboard/*']);
   });
 });
 
@@ -299,6 +333,33 @@ describe('client credentials', () => {
 // ---------------------------------------------------------------------------
 
 describe('verifyAccessToken', () => {
+  function projectionSql(missingColumns: ReadonlySet<string>) {
+    const queries: string[] = [];
+    const sqlMock = async (strings: TemplateStringsArray, ..._values: unknown[]) => {
+      const query = strings.join('$');
+      queries.push(query);
+      if (!query.includes('FROM oauth_tokens')) return [];
+
+      for (const column of ['source_id', 'federated_read', 'bound_slug_prefixes']) {
+        if (query.includes(`c.${column}`) && missingColumns.has(column)) {
+          throw Object.assign(new Error(`column c.${column} does not exist`), { code: '42703' });
+        }
+      }
+
+      return [{
+        client_id: 'legacy-schema-client',
+        client_name: 'legacy schema client',
+        scopes: ['read', 'write'],
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+        resource: null,
+        ...(query.includes('c.source_id') ? { source_id: 'default' } : {}),
+        ...(query.includes('c.federated_read') ? { federated_read: ['default', 'shared'] } : {}),
+        ...(query.includes('c.bound_slug_prefixes') ? { bound_slug_prefixes: ['inbox/test/'] } : {}),
+      }];
+    };
+    return { queries, sqlMock };
+  }
+
   test('valid token returns auth info', async () => {
     const { clientId, clientSecret } = await provider.registerClientManual(
       'verify-test', ['client_credentials'], 'read write',
@@ -309,6 +370,43 @@ describe('verifyAccessToken', () => {
     expect(authInfo.clientId).toBe(clientId);
     expect(authInfo.scopes).toContain('read');
     expect(authInfo.token).toBe(tokens.access_token);
+  });
+
+  test('pre-binding schema preserves source grants and leaves routine writes fail-closed', async () => {
+    const { queries, sqlMock } = projectionSql(new Set(['bound_slug_prefixes']));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-binding-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(2);
+    expect(authInfo.sourceId).toBe('default');
+    expect(authInfo.allowedSources).toEqual(['default', 'shared']);
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
+  });
+
+  test('pre-v61 schema falls through to the source-only projection', async () => {
+    const { queries, sqlMock } = projectionSql(new Set(['federated_read', 'bound_slug_prefixes']));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-v61-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(3);
+    expect(authInfo.sourceId).toBe('default');
+    expect(authInfo.allowedSources).toBeUndefined();
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
+  });
+
+  test('pre-v60 schema reaches the projection without source columns', async () => {
+    const { queries, sqlMock } = projectionSql(new Set([
+      'source_id',
+      'federated_read',
+      'bound_slug_prefixes',
+    ]));
+    const legacyProvider = new GBrainOAuthProvider({ sql: sqlMock as any, tokenTtl: 60 });
+
+    const authInfo = await legacyProvider.verifyAccessToken('pre-v60-token') as CoreAuthInfo;
+    expect(queries.filter(query => query.includes('FROM oauth_tokens'))).toHaveLength(4);
+    expect(authInfo.sourceId).toBeUndefined();
+    expect(authInfo.allowedSources).toBeUndefined();
+    expect(authInfo.writeSlugPrefixes).toBeUndefined();
   });
 
   test('expired token is rejected', async () => {
@@ -1601,6 +1699,26 @@ describe('v0.41.3 DCR validator (T5)', () => {
 });
 
 describe('#1353 DCR default-grant hardening', () => {
+  test('DCR rejects elevated scopes that have no operator-supplied bindings', async () => {
+    for (const scope of ['read write', 'admin', 'agent']) {
+      await expect(
+        provider.clientsStore.registerClient!({
+          client_name: `unbound-${scope.replace(/ /g, '-')}`,
+          grant_types: ['authorization_code'],
+          scope,
+          redirect_uris: ['https://example.test/cb'],
+          token_endpoint_auth_method: 'none',
+        } as any),
+      ).rejects.toThrow(/dynamic client registration is read-only/);
+    }
+
+    const rows = await sql`
+      SELECT client_id FROM oauth_clients
+      WHERE client_name LIKE ${'unbound-%'}
+    `;
+    expect(rows).toHaveLength(0);
+  });
+
   test('DCR rejects explicit client_credentials by default', async () => {
     await expect(
       provider.clientsStore.registerClient!({

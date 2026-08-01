@@ -147,6 +147,8 @@ export interface SubagentDeps {
    * the caller's subagentId at dispatch time.
    */
   toolRegistry?: ToolDef[];
+  /** Test seam for asserting handler → tool-context capability propagation. */
+  buildToolRegistry?: typeof buildBrainTools;
 }
 
 // ── Types for internal state ────────────────────────────────
@@ -199,8 +201,42 @@ export function makeSubagentHandler(deps: SubagentDeps) {
 
   return async function subagentHandler(ctx: MinionJobContext): Promise<SubagentResult> {
     const data = (ctx.data ?? {}) as unknown as SubagentHandlerData;
+    const rawData = (ctx.data ?? {}) as Record<string, unknown>;
     if (!data.prompt || typeof data.prompt !== 'string') {
       throw new Error('subagent job data.prompt is required (string)');
+    }
+    if (
+      data.allowed_tools !== undefined
+      && (
+        !Array.isArray(data.allowed_tools)
+        || data.allowed_tools.some(tool => typeof tool !== 'string' || tool.length === 0)
+      )
+    ) {
+      throw new Error('subagent allowed_tools must be an array of non-empty strings when supplied');
+    }
+    if (
+      data.allowed_slug_prefixes !== undefined
+      && (
+        !Array.isArray(data.allowed_slug_prefixes)
+        || data.allowed_slug_prefixes.some(prefix => typeof prefix !== 'string' || prefix.length === 0)
+      )
+    ) {
+      throw new Error('subagent allowed_slug_prefixes must be an array of non-empty strings when supplied');
+    }
+    if (data.trusted_workspace !== undefined && data.trusted_workspace !== true) {
+      throw new Error('subagent trusted_workspace must be true or omitted');
+    }
+    if (
+      data.trusted_workspace === true
+      && (
+        data.allowed_slug_prefixes === undefined
+        || data.allowed_slug_prefixes.length === 0
+      )
+    ) {
+      throw new Error('trusted-workspace subagent requires a non-empty allowed_slug_prefixes array');
+    }
+    if (data.trusted_workspace === true && rawData.__owner_client_id !== undefined) {
+      throw new Error('remote-owned subagent jobs cannot claim trusted-workspace provenance');
     }
 
     // v0.38 (S1.5 + S1.7) — capability-based gate replaces the v0.31.12
@@ -266,22 +302,27 @@ export function makeSubagentHandler(deps: SubagentDeps) {
 
     // Build the tool registry bound to THIS job as the owning subagent.
     // brain_id (per-call brain override; children inherit parent's unless
-    // they set their own) and allowed_slug_prefixes (v0.23 trusted-workspace
-    // allow-list — flows through buildBrainTools → the put_page schema
+    // they set their own) and allowed_slug_prefixes (delegated write scope
+    // — flows through buildBrainTools → the put_page schema
     // description AND the OperationContext, so the model's tool schema and
     // the server-side check stay in sync).
-    const registry = deps.toolRegistry ?? buildBrainTools({
+    const buildToolRegistry = deps.buildToolRegistry ?? buildBrainTools;
+    const registry = deps.toolRegistry ?? buildToolRegistry({
       subagentId: ctx.id,
       engine,
       config,
       brainId: data.brain_id,
       allowedSlugPrefixes: data.allowed_slug_prefixes,
+      trustedWorkspace: data.trusted_workspace === true,
       // #1586: cycle-resolved source scope for tool-call OperationContexts.
       sourceId: data.source_id,
     });
-    const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
-      ? filterAllowedTools(registry, data.allowed_tools)
-      : registry;
+    // Undefined preserves the trusted internal legacy default (full reviewed
+    // registry). An explicit empty array means no tools. Never collapse those
+    // two states: remote submit_agent jobs persist an explicit capability set.
+    const toolDefs = data.allowed_tools === undefined
+      ? registry
+      : filterAllowedTools(registry, data.allowed_tools);
 
     // v0.41 Approach C: render the final system prompt now that toolDefs
     // is known. Splices a deterministic tool-usage preamble listing each

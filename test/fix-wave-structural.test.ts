@@ -78,6 +78,11 @@ describe('v0.36.1.x #1077 — admin register-client supports PKCE public clients
     // (under either name) from req.body. Pin the fallback pattern so the
     // PKCE-fix regression contract stays load-bearing.
     expect(src).toMatch(/req\.body[^;]*scopes\s*\?\?\s*[^;]*scope\b/);
+    // Routine write clients created in the dashboard must persist their
+    // namespace binding instead of becoming unusable at the first put_page.
+    expect(src).toMatch(/boundSlugPrefixes[^;]*\?\?[^;]*bound_slug_prefixes/);
+    expect(src).toMatch(/normalizeBoundSlugPrefixesInput\(rawBoundSlugPrefixes\)/);
+    expect(src).toMatch(/registerClientManual\([^)]*\{\s*boundSlugPrefixes\s*\}[^)]*\)/s);
     // v0.41.3 (T4 atomicity fix, codex F4): admin endpoint now validates
     // tokenEndpointAuthMethod via the shared validator and passes it to
     // registerClientManual as a positional arg. Pre-v0.41.3 the route did

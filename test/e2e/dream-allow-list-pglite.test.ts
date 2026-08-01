@@ -1,6 +1,6 @@
 /**
  * E2E security regression: poisoned-transcript guard for the v0.21
- * trusted-workspace allow-list.
+ * delegated subagent write allow-list.
  *
  * Runs against PGLite in-memory (no DATABASE_URL required). Builds the
  * brain tool registry with `allowed_slug_prefixes` set the same way the
@@ -14,10 +14,11 @@
  *     injection guarantee)
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { buildBrainTools } from '../../src/core/minions/tools/brain-allowlist.ts';
 import type { GBrainConfig } from '../../src/core/config.ts';
+import { resetGateway } from '../../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 
@@ -28,7 +29,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  resetGateway();
   if (engine) await engine.disconnect();
+});
+
+beforeEach(() => {
+  // These tests exercise namespace authorization, not embedding providers.
+  // Keep them hermetic if another E2E file configured the process gateway.
+  resetGateway();
 });
 
 const config = {} as unknown as GBrainConfig;
@@ -42,7 +50,7 @@ function findPutPageTool(tools: Awaited<ReturnType<typeof buildBrainTools>>) {
   return t;
 }
 
-describe('E2E allow-list — trusted-workspace path', () => {
+describe('E2E allow-list — delegated namespace path', () => {
   test('ALLOW: subagent put_page within allow-list writes the page', async () => {
     const tools = buildBrainTools({
       subagentId: 999,

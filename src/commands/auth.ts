@@ -24,6 +24,7 @@ import { loadConfig, toEngineConfig } from '../core/config.ts';
 import { createEngine } from '../core/engine-factory.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import { sqlQueryForEngine, executeRawJsonb, type SqlQuery } from '../core/sql-query.ts';
+import { normalizeBoundSlugPrefixesInput } from '../core/scope.ts';
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -354,6 +355,31 @@ interface RegisterClientArgs {
   budgetUsdPerDay: string | undefined;
 }
 
+/**
+ * A routine OAuth writer without a namespace can authenticate successfully
+ * but every slug write will fail closed at operation time. Refuse that
+ * unusable registration before touching the database. Admin remains the
+ * explicit operator escape hatch.
+ */
+export function assertRegisterClientWriteNamespace(
+  scopes: string,
+  boundSlugPrefixes: readonly string[] | undefined,
+): void {
+  // Commas are not valid OAuth scope separators, but include them here so an
+  // obsolete `read,write` example cannot bypass this safety check before the
+  // provider surfaces its InvalidScopeError.
+  const selectedScopes = new Set(scopes.split(/[\s,]+/).filter(Boolean));
+  if (
+    selectedScopes.has('write')
+    && !selectedScopes.has('admin')
+    && (!boundSlugPrefixes || boundSlugPrefixes.length === 0)
+  ) {
+    throw new Error(
+      'Non-admin OAuth clients with write scope require --bound-slug-prefixes (for example, "inbox/client-name/*").',
+    );
+  }
+}
+
 export function parseRegisterClientArgs(args: string[]): RegisterClientArgs {
   const out: RegisterClientArgs = {
     grantTypes: ['client_credentials'],
@@ -410,7 +436,7 @@ export function parseRegisterClientArgs(args: string[]): RegisterClientArgs {
       case '--bound-brain': out.boundBrainId = requireValue(); i += 2; break;
       case '--bound-slug-prefixes': {
         const v = requireValue();
-        out.boundSlugPrefixes = v.split(',').map(s => s.trim()).filter(Boolean);
+        out.boundSlugPrefixes = normalizeBoundSlugPrefixesInput(v);
         i += 2; break;
       }
       case '--bound-max-concurrent': {
@@ -451,6 +477,7 @@ async function registerClient(name: string, args: string[]) {
   let parsed: RegisterClientArgs;
   try {
     parsed = parseRegisterClientArgs(args);
+    assertRegisterClientWriteNamespace(parsed.scopes, parsed.boundSlugPrefixes);
   } catch (e: any) {
     console.error(`Error: ${e.message}`);
     console.error('Usage: auth register-client <name> [--grant-types G] [--scopes S] [--source SOURCE] [--federated-read SRC1,SRC2,...] [--redirect-uri URI ...] [--token-endpoint-auth-method client_secret_post|client_secret_basic|none] [--bound-tools T1,T2] [--bound-source SOURCE] [--bound-brain BRAIN] [--bound-slug-prefixes P1,P2] [--bound-max-concurrent N] [--budget-usd-per-day USD]');
@@ -497,7 +524,7 @@ async function registerClient(name: string, args: string[]) {
         console.log(`  Bound tools:         ${(parsed.boundTools ?? []).join(', ') || '<none>'}`);
         console.log(`  Bound source:        ${parsed.boundSourceId ?? '<none>'}`);
         console.log(`  Bound brain:         ${parsed.boundBrainId ?? '<none>'}`);
-        console.log(`  Bound slug prefixes:${parsed.boundSlugPrefixes ? ' ' + parsed.boundSlugPrefixes.join(', ') : ' <none>'}`);
+        console.log(`  Write slug prefixes:${parsed.boundSlugPrefixes ? ' ' + parsed.boundSlugPrefixes.join(', ') : ' <none>'}`);
         console.log(`  Max concurrency:     ${parsed.boundMaxConcurrent ?? 1}`);
         console.log(`  Daily budget USD:    ${parsed.budgetUsdPerDay ?? '<none>'}`);
       }
@@ -645,7 +672,8 @@ Usage:
      --bound-tools <tool1,tool2>                           Bind submit_agent to an allow-list of tools
      --bound-source <id>                                   Bind submit_agent jobs to a source id
      --bound-brain <id>                                    Bind submit_agent jobs to a brain id
-     --bound-slug-prefixes <prefix1,prefix2>               Bind submit_agent writes to slug prefixes
+     --bound-slug-prefixes <glob1,glob2>                   Bind routine OAuth slug writes and submit_agent writes
+                                                          (for example: inbox/chatgpt/*)
      --bound-max-concurrent <n>                            Bound submit_agent concurrency (default: 1)
      --budget-usd-per-day <usd>                            Bound submit_agent daily spend cap
   gbrain auth rescope-client <client_id> [options]        Change an existing client's source scope (e.g. a DCR

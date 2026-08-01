@@ -194,7 +194,7 @@ function failPing(e: unknown, json: boolean): never {
   } else {
     console.error(`Failed to submit autopilot-cycle: ${msg}`);
     if (reason === 'auth' || reason === 'auth_after_refresh') {
-      console.error('Hint: ensure the OAuth client was registered with admin scope (`--scopes read,write,admin`).');
+      console.error('Hint: ensure the OAuth client was registered with admin scope (`--scopes "read write admin"`).');
     }
   }
   process.exit(1);
@@ -220,7 +220,7 @@ async function runRemoteDoctorCli(config: NonNullable<ReturnType<typeof loadConf
     } else {
       console.error(`Failed to run remote doctor: ${msg}`);
       if (reason === 'auth' || reason === 'auth_after_refresh') {
-        console.error('Hint: run_doctor requires admin scope. Re-register the client with `--scopes read,write,admin`.');
+        console.error('Hint: run_doctor requires admin scope. Re-register the client with `--scopes "read write admin"`.');
       }
     }
     process.exit(1);

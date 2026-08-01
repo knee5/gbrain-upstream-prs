@@ -243,16 +243,26 @@ describe('canReadMountsForCtx classifier', () => {
 
   test('subagent without trusted-workspace prefixes → false (D18 rule 4)', () => {
     expect(
-      canReadMountsForCtx({ remote: true, viaSubagent: true, allowedSlugPrefixes: [] }),
+      canReadMountsForCtx({ remote: true, viaSubagent: true }),
     ).toBe(false);
   });
 
-  test('subagent with trusted-workspace prefixes (cycle synthesize/patterns) → true', () => {
+  test('bounded remote subagent is not trusted merely because it has slug grants', () => {
     expect(
       canReadMountsForCtx({
         remote: true,
         viaSubagent: true,
         allowedSlugPrefixes: ['wiki/agents/synthesize/*'],
+      }),
+    ).toBe(false);
+  });
+
+  test('subagent with explicit protected-cycle provenance → true', () => {
+    expect(
+      canReadMountsForCtx({
+        remote: true,
+        viaSubagent: true,
+        trustedWorkspace: true,
       }),
     ).toBe(true);
   });

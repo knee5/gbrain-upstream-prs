@@ -96,7 +96,15 @@ describe('put_page empty-overwrite guard — rejection', () => {
     await seedPage('inbox/guarded-remote');
     const err = await expectRejected(
       { slug: 'inbox/guarded-remote', content: '' },
-      makeCtx({ remote: true }),
+      makeCtx({
+        remote: true,
+        auth: {
+          token: 'test-token',
+          clientId: 'empty-guard-write-client',
+          scopes: ['read', 'write'],
+          writeSlugPrefixes: ['inbox/*'],
+        },
+      }),
     );
     expect(err.code).toBe('invalid_params');
   });

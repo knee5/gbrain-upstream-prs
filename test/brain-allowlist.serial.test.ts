@@ -19,6 +19,7 @@ import {
 } from '../src/core/minions/tools/brain-allowlist.ts';
 import type { GBrainConfig } from '../src/core/config.ts';
 import type { ToolCtx } from '../src/core/minions/types.ts';
+import { resetGateway } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 const config: GBrainConfig = { engine: 'pglite' } as GBrainConfig;
@@ -30,10 +31,14 @@ beforeAll(async () => {
 }, 60_000); // OAuth v25 + full migration chain needs breathing room
 
 afterAll(async () => {
+  resetGateway();
   if (engine) await engine.disconnect();
 }, 60_000);
 
 beforeEach(async () => {
+  // Keep put_page tests offline even when a sibling imported CLI config with
+  // a placeholder embedding key.
+  resetGateway();
   await engine.executeRaw('DELETE FROM pages');
 });
 
@@ -180,6 +185,56 @@ describe('buildBrainTools', () => {
     expect(() =>
       buildBrainTools({ subagentId: 1, engine, config, sourceId: '../evil' }),
     ).toThrow();
+  });
+
+  test('trusted-workspace tool context requires an explicit non-empty namespace', () => {
+    expect(() =>
+      buildBrainTools({ subagentId: 1, engine, config, trustedWorkspace: true }),
+    ).toThrow(/trusted-workspace.*non-empty/);
+    expect(() =>
+      buildBrainTools({
+        subagentId: 1,
+        engine,
+        config,
+        trustedWorkspace: true,
+        allowedSlugPrefixes: [],
+      }),
+    ).toThrow(/trusted-workspace.*non-empty/);
+  });
+
+  test('trustedWorkspace option reaches the operation context independently of slug scope', async () => {
+    const untrustedTools = buildBrainTools({
+      subagentId: 51,
+      engine,
+      config,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+    });
+    const untrustedPut = untrustedTools.find(t => t.name === 'brain_put_page')!;
+    const untrusted = await untrustedPut.execute(
+      {
+        slug: 'wiki/personal/reflections/oauth-bounded',
+        content: '---\ntitle: OAuth bounded\n---\nbody',
+      },
+      { engine, jobId: 51, remote: true },
+    ) as { auto_links?: { skipped?: string } };
+    expect(untrusted.auto_links).toEqual({ skipped: 'remote' });
+
+    const trustedTools = buildBrainTools({
+      subagentId: 52,
+      engine,
+      config,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      trustedWorkspace: true,
+    });
+    const trustedPut = trustedTools.find(t => t.name === 'brain_put_page')!;
+    const trusted = await trustedPut.execute(
+      {
+        slug: 'wiki/personal/reflections/protected-cycle',
+        content: '---\ntitle: Protected cycle\n---\nbody',
+      },
+      { engine, jobId: 52, remote: true },
+    ) as { auto_links?: { skipped?: string } };
+    expect(trusted.auto_links?.skipped).not.toBe('remote');
   });
 });
 

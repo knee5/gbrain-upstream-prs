@@ -28,6 +28,7 @@ import type { SearchResult } from './types.ts';
 import { CJK_SLUG_CHARS, PAGE_SLUG_SEG } from './cjk.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
+import { validateSlug } from './utils.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -171,18 +172,29 @@ export function validatePageSlug(slug: string): void {
  * Match a slug against a list of allow-list prefix globs.
  *
  * Glob form: `<prefix>/*` matches any slug starting with `<prefix>/` and
- * having at least one more segment (single or multi). Bare `<prefix>` (no
- * trailing `/*`) matches that exact slug only. The `*` is intentionally
- * permissive — depth is unbounded, so `wiki/originals/*` matches both
- * `wiki/originals/idea-x` and `wiki/originals/ideas/2026-04-25-idea-y`.
+ * having at least one more segment (single or multi). Persisted legacy
+ * `<prefix>/` grants retain the same descendant-only behavior. Bare
+ * `<prefix>` (no trailing slash or `/*`) matches that exact slug only. The
+ * `*` is intentionally permissive — depth is unbounded, so
+ * `wiki/originals/*` matches both `wiki/originals/idea-x` and
+ * `wiki/originals/ideas/2026-04-25-idea-y`.
  *
- * Used by the v0.23 dream-cycle trusted-workspace path. Order doesn't
- * matter; the first match wins (returns true on any match).
+ * Used by both protected dream-cycle jobs and registration-bounded OAuth
+ * delegation. Order doesn't matter; the first match wins.
  */
+function slugNamespaceBase(grant: string): string | null {
+  if (grant.endsWith('/*')) return grant.slice(0, -2);
+  // Pre-boundary clients persisted namespace grants as `wiki/`. New
+  // registrations use the explicit `wiki/*` form, but existing rows must
+  // retain their descendant-only meaning until they are re-registered.
+  if (grant.endsWith('/')) return grant.slice(0, -1);
+  return null;
+}
+
 export function matchesSlugAllowList(slug: string, prefixes: readonly string[]): boolean {
   for (const p of prefixes) {
-    if (p.endsWith('/*')) {
-      const base = p.slice(0, -2);
+    const base = slugNamespaceBase(p);
+    if (base !== null) {
       if (slug === base) continue;
       if (slug.startsWith(base + '/')) return true;
     } else if (p === slug) {
@@ -193,14 +205,55 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
 }
 
 /**
+ * Return whether every slug admitted by one delegated allow-list entry is
+ * also admitted by a registration-time binding.
+ *
+ * Exact entries contain only themselves. A trailing `/*` entry (or persisted
+ * legacy trailing `/` entry) contains exact descendants and narrower
+ * namespaces, but not its own base slug. Keep this set-containment check
+ * separate from raw string prefixes:
+ * `inbox/client` must never contain the sibling namespace
+ * `inbox/client-evil/*`.
+ */
+export function isSlugGrantContained(requested: string, bound: string): boolean {
+  const requestedBase = slugNamespaceBase(requested);
+  if (requestedBase === null) {
+    return matchesSlugAllowList(requested, [bound]);
+  }
+  const boundBase = slugNamespaceBase(bound);
+  if (boundBase === null) return false;
+
+  return requestedBase === boundBase || requestedBase.startsWith(`${boundBase}/`);
+}
+
+/**
+ * Validate and canonicalize a caller-supplied operation slug before any
+ * authorization decision. Persisted OAuth grants are canonical lowercase;
+ * checking a mixed-case request first would incorrectly deny a write that the
+ * storage layer later lowercases into the granted namespace.
+ */
+function canonicalizeOperationSlug(slug: string, opName: string): string {
+  try {
+    return validateSlug(slug);
+  } catch (e) {
+    throw new OperationError(
+      'invalid_params',
+      `${opName} received an invalid slug: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+/**
  * Subagent slug-fence enforcement, shared by every mutating op a subagent
  * can reach (put_page, add_timeline_entry). FAIL-CLOSED: `viaSubagent=true`
  * enforces the check even if the dispatcher forgot to populate `subagentId`.
  *
- *   - Trusted-workspace path (ctx.allowedSlugPrefixes set by cycle.ts under
- *     PROTECTED_JOB_NAMES \u2014 MCP cannot reach it): slug must match the
- *     allow-list globs.
- *   - Legacy default: slug must live under `wiki/agents/<subagentId>/...`
+ *   - Delegated namespace path: slug must match the allow-list globs. This
+ *     field is scope only; remote OAuth agents legitimately carry it too.
+ *   - Explicit empty allow-list: deny every slug. This is distinct from an
+ *     omitted allow-list so a persisted `[]` can never widen a delegated job.
+ *   - Legacy default (field omitted): slug must live under
+ *     `wiki/agents/<subagentId>/...`
  *     (anchored, slash-boundary \u2014 `wiki/agents/12evil/*` can't impersonate
  *     subagent 12).
  */
@@ -210,11 +263,11 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
     throw new OperationError('permission_denied', `${opName} via subagent requires ctx.subagentId`);
   }
   const allowList = ctx.allowedSlugPrefixes;
-  if (allowList && allowList.length > 0) {
+  if (allowList !== undefined) {
     if (!matchesSlugAllowList(slug, allowList)) {
       throw new OperationError(
         'permission_denied',
-        `${opName} slug '${slug}' is not within the trusted-workspace allow-list (${allowList.join(', ')})`
+        `${opName} slug '${slug}' is not within the delegated write allow-list (${allowList.join(', ') || 'empty: deny all'})`
       );
     }
   } else {
@@ -223,6 +276,76 @@ function enforceSubagentSlugFence(ctx: OperationContext, slug: string, opName: s
       throw new OperationError('permission_denied', `${opName} via subagent must write under '${prefix}...'`);
     }
   }
+}
+
+/**
+ * OAuth slug-write namespace fence.
+ *
+ * Routine remote writers (`read write`, without `admin`) must carry an
+ * explicit registration-time `bound_slug_prefixes` grant and the requested
+ * slug must match it. Missing metadata fails closed, including on an older
+ * schema where token verification could not load the column. Admin remains
+ * the explicit operator escape hatch. Trusted local callers and auth-less
+ * stdio keep their existing behavior; the latter is outside the OAuth
+ * boundary and remains governed by the local-pipe deployment policy.
+ *
+ * `enforceOAuthWriteSlugForAuth` is the identity-only form used by
+ * authenticated network intake routes that do not build an OperationContext.
+ * Operation handlers use `enforceOAuthWriteSlugFence`, which additionally
+ * preserves the trusted-local, stdio, and subagent transport rules.
+ */
+export function enforceOAuthWriteSlugForAuth(
+  auth: AuthInfo,
+  slug: string,
+  opName: string,
+): string {
+  const canonicalSlug = canonicalizeOperationSlug(slug, opName);
+  if (auth.scopes.includes('admin')) return canonicalSlug;
+  const allowList = auth.writeSlugPrefixes;
+  if (!allowList || allowList.length === 0) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} requires an OAuth write namespace; this client has no bound_slug_prefixes.`,
+      'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
+    );
+  }
+  if (!matchesSlugAllowList(canonicalSlug, allowList)) {
+    throw new OperationError(
+      'permission_denied',
+      `${opName} slug '${canonicalSlug}' is outside this OAuth client's write namespace (${allowList.join(', ')}).`,
+      'Write under an allowed prefix or ask the operator to register a different namespace.',
+    );
+  }
+  return canonicalSlug;
+}
+
+export function enforceOAuthWriteSlugFence(
+  ctx: OperationContext,
+  slug: string,
+  opName: string,
+): string {
+  const canonicalSlug = canonicalizeOperationSlug(slug, opName);
+  if (ctx.remote === false || ctx.auth?.scopes.includes('admin')) return canonicalSlug;
+  // The local stdio MCP pipe and an explicitly marked subagent are the only
+  // intentional auth-less remote paths. Re-run the subagent fence here rather
+  // than assuming every caller already did so: add_tag, add_link,
+  // put_raw_data, log_ingest, and ontology_propose share this OAuth fence but
+  // do not otherwise call enforceSubagentSlugFence. Without this check a
+  // partial/forged viaSubagent context could turn those tools into
+  // unrestricted writers.
+  if (!ctx.auth) {
+    if (ctx.transport === 'stdio') return canonicalSlug;
+    if (ctx.viaSubagent === true) {
+      enforceSubagentSlugFence(ctx, canonicalSlug, opName);
+      return canonicalSlug;
+    }
+    throw new OperationError(
+      'permission_denied',
+      `${opName} requires an authenticated remote identity.`,
+      'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
+    );
+  }
+  return enforceOAuthWriteSlugForAuth(ctx.auth, canonicalSlug, opName);
 }
 
 /**
@@ -304,6 +427,19 @@ export interface AuthInfo {
    * case (back-compat).
    */
   allowedSources?: string[];
+  /**
+   * Slug-prefix globs this OAuth client may mutate through routine write
+   * operations such as `put_page`, `add_tag`, `add_link`,
+   * `add_timeline_entry`, `put_raw_data`, `log_ingest`, and
+   * `ontology_propose`. Sourced from `oauth_clients.bound_slug_prefixes` at
+   * token-verification time. A non-admin remote caller with no entries is
+   * denied slug-targeting writes; absence never means "all slugs".
+   *
+   * The same persisted binding also constrains `submit_agent` child writes.
+   * Reusing one registration-time boundary keeps direct and delegated writes
+   * from drifting onto different namespace policies.
+   */
+  writeSlugPrefixes?: string[];
 }
 
 export interface OperationContext {
@@ -354,19 +490,21 @@ export interface OperationContext {
   subagentId?: number;
   viaSubagent?: boolean;
   /**
-   * Trusted-workspace allow-list (v0.23 dream cycle). When the cycle's
-   * synthesize/patterns phases dispatch a subagent, they thread an
+   * Internal provenance bit for protected dream-cycle dispatch. Never infer
+   * this from allowedSlugPrefixes: OAuth submit_agent jobs carry a bounded
+   * namespace but remain remote/untrusted for secondary writes and mounted
+   * brain reads.
+   */
+  trustedWorkspace?: boolean;
+  /**
+   * Per-job write allow-list. When a dispatcher delegates a subagent, it threads an
    * explicit list of slug-prefix globs (e.g. "wiki/personal/reflections/*")
    * through this field. put_page enforces it BEFORE the legacy
    * `wiki/agents/<id>/...` namespace check.
    *
-   * Trust comes from the SUBMITTER (subagent jobs are gated by
-   * PROTECTED_JOB_NAMES — MCP cannot submit them), not from `remote`.
-   * Every subagent tool call has `remote=true` for auto-link safety,
-   * so basing trust on `remote` is incoherent (would always reject).
-   *
-   * Empty / unset → fall back to the legacy namespace check (existing
-   * v0.15 behavior; pure addition, no regression).
+   * Unset → fall back to the legacy namespace check (existing v0.15
+   * behavior). An explicit empty array denies every slug; empty must never
+   * widen a delegated job to the legacy namespace.
    */
   allowedSlugPrefixes?: string[];
   /**
@@ -708,6 +846,13 @@ export interface Operation {
   handler: (ctx: OperationContext, params: Record<string, unknown>) => Promise<unknown>;
   mutating?: boolean;
   /**
+   * MCP presentation hint for logically read-only operations that may reach
+   * outside the brain's closed data domain. The tool-definition mapper derives
+   * all other annotations from `scope` + `mutating`; keep the exceptional
+   * open-world bit on the operation contract so transports cannot drift.
+   */
+  mcpOpenWorld?: boolean;
+  /**
    * Capability scope required to invoke this op over an authenticated
    * transport. v0.28 added `sources_admin` (manage federated sources) and
    * `users_admin` (reserved). The hierarchy lives in src/core/scope.ts —
@@ -858,7 +1003,7 @@ const put_page: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    const slug = p.slug as string;
+    const slug = canonicalizeOperationSlug(p.slug as string, 'put_page');
 
     // v0.39.3.0 CV6 trust gate for provenance write-through (WARN-8).
     // Only trusted LOCAL callers (ctx.remote === false — capture CLI,
@@ -892,8 +1037,12 @@ const put_page: Operation = {
     // short-circuit so preview calls surface the same rejection. See
     // enforceSubagentSlugFence for the fail-closed policy.
     enforceSubagentSlugFence(ctx, slug, 'put_page');
+    // OAuth clients with routine write scope are narrower than an operator:
+    // they may create/update only beneath their registration-time namespace.
+    // Runs before dry-run so previews exercise the same authorization gate.
+    enforceOAuthWriteSlugFence(ctx, slug, 'put_page');
 
-    if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug: p.slug };
+    if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug };
 
     // Empty-overwrite guard: empty/whitespace-only content over an existing
     // non-empty page is almost always an input-plumbing failure (e.g. a
@@ -1009,30 +1158,31 @@ const put_page: Operation = {
     // reconciles drift.
     //
     // Trust gating:
-    //   - Subagent sandbox (viaSubagent without allowedSlugPrefixes) → DB-only.
-    //   - All other writes → write-through.
+    //   - Every remote/untrusted caller → DB-only. A source's `local_path` is
+    //     host-specific and may name another account's or machine's checkout;
+    //     the database is the durable cross-host sink.
+    //   - Trusted local CLI callers → atomic write-through.
+    //   - A local sandboxed subagent (defense-in-depth; current dispatchers are
+    //     remote) also stays DB-only.
     let writeThrough: { written: boolean; path?: string; skipped?: string; error?: string } | undefined;
     const isSandboxSubagent = ctx.viaSubagent === true
-      && !(Array.isArray(ctx.allowedSlugPrefixes) && ctx.allowedSlugPrefixes.length > 0);
-    if (!ctx.dryRun && result.status !== 'error' && !isSandboxSubagent) {
+      && ctx.trustedWorkspace !== true;
+    if (result.status !== 'error' && ctx.remote !== false) {
+      // Fail closed: a missing/undefined trust bit (possible only via a cast)
+      // is remote too. Do not dereference DB-supplied filesystem paths from an
+      // agent-facing transport.
+      writeThrough = { written: false, skipped: 'remote' };
+    } else if (result.status !== 'error' && isSandboxSubagent) {
+      writeThrough = { written: false, skipped: 'subagent_sandbox' };
+    } else if (result.status !== 'error') {
       const sourceId = ctx.sourceId ?? 'default';
-      const provenanceVia = ctx.remote === false ? 'put_page' : 'mcp:put_page';
       // Shared canonical write-through (also used by `gbrain brainstorm/lsd
       // --save`). Renders the file from the saved DB row and writes it
       // atomically; never throws (failures land in skipped/error).
       writeThrough = await writePageThrough(ctx.engine, result.slug, {
         sourceId,
-        frontmatterOverrides: {
-          ingested_via: provenanceVia,
-          ingested_at: new Date().toISOString(),
-          source_kind: provenanceVia,
-        },
         logger: ctx.logger,
       });
-    } else if (isSandboxSubagent) {
-      writeThrough = { written: false, skipped: 'subagent_sandbox' };
-    } else if (ctx.dryRun) {
-      writeThrough = { written: false, skipped: 'dry_run' };
     }
 
     // Auto-link post-hook: runs AFTER importFromContent (which is its own
@@ -1052,15 +1202,15 @@ const put_page: Operation = {
       | { skipped: 'remote' }
       | undefined;
     let autoTimeline: { created: number } | { error: string } | { skipped: 'remote' } | undefined;
-    // Trusted-workspace path (v0.23 dream cycle) re-enables auto-link/timeline
-    // even though ctx.remote=true, because the allow-list bounds the slug and
-    // the synthesis prompt is itself the trusted dispatcher. Without this,
+    // Protected dream-cycle provenance re-enables auto-link/timeline even
+    // though ctx.remote=true. The independent allow-list bounds the slug;
+    // trustedWorkspace says the synthesis prompt came from the internal
+    // dispatcher rather than a routine OAuth submit_agent job. Without this,
     // the cycle's `extract` phase would have to recompute every edge, and
     // patterns (which runs after extract) would still see the right graph
     // but auto_timeline would never fire on synth output.
     const trustedWorkspace = ctx.viaSubagent === true
-      && Array.isArray(ctx.allowedSlugPrefixes)
-      && ctx.allowedSlugPrefixes.length > 0;
+      && ctx.trustedWorkspace === true;
     if (ctx.remote !== false && !trustedWorkspace) {
       autoLinks = { skipped: 'remote' };
       autoTimeline = { skipped: 'remote' };
@@ -1115,37 +1265,49 @@ const put_page: Operation = {
     // (MEDIUM facts wait for the dream cycle but DO land via put_page,
     // matching the pre-fix behavior on this surface).
     let factsQueued: { queued: boolean } | { skipped: string } | undefined;
-    try {
-      const { runFactsBackstop } = await import('./facts/backstop.ts');
-      const r = await runFactsBackstop(
-        {
-          slug,
-          type: result.parsedPage!.type,
-          compiled_truth: result.parsedPage!.compiled_truth,
-          frontmatter: result.parsedPage!.frontmatter,
-        },
-        {
-          engine: ctx.engine,
-          sourceId: ctx.sourceId ?? 'default',
-          sessionId: (ctx as { source_session?: string }).source_session ?? null,
-          source: 'mcp:put_page',
-          mode: 'queue',
-        },
-      );
-      if (r.mode === 'queue' && r.enqueued) {
-        factsQueued = { queued: true };
-      } else if (r.mode === 'queue' && r.skipped) {
-        // Preserve the pre-v0.31.2 response shape for MCP clients:
-        // 'kind:guide' / 'too_short' / 'subagent_namespace' / 'dream_generated'
-        // (bare reasons), not the helper's namespaced 'eligibility_failed:...'
-        // discriminator. Map back here.
-        const bare = r.skipped.startsWith('eligibility_failed:')
-          ? r.skipped.slice('eligibility_failed:'.length)
-          : r.skipped;
-        factsQueued = { skipped: bare };
+    // SECURITY: use the same remote/untrusted gate as auto-link, timeline,
+    // and chronicle above. The OAuth fence authorizes the page slug, but the
+    // facts model is free to return different entity slugs. Running the
+    // backstop for a routine remote writer would therefore let model output
+    // escape the caller's bound_slug_prefixes through facts DB inserts and
+    // writeFactsToFence's host-mirror writes. Remote OAuth/stdio callers stay
+    // DB-only and get an explicit response marker; only trusted local writes
+    // and the protected trusted-workspace dispatcher retain the backstop.
+    if (ctx.remote !== false && !trustedWorkspace) {
+      factsQueued = { skipped: 'remote' };
+    } else if (result.parsedPage) {
+      try {
+        const { runFactsBackstop } = await import('./facts/backstop.ts');
+        const r = await runFactsBackstop(
+          {
+            slug,
+            type: result.parsedPage.type,
+            compiled_truth: result.parsedPage.compiled_truth,
+            frontmatter: result.parsedPage.frontmatter,
+          },
+          {
+            engine: ctx.engine,
+            sourceId: ctx.sourceId ?? 'default',
+            sessionId: (ctx as { source_session?: string }).source_session ?? null,
+            source: 'mcp:put_page',
+            mode: 'queue',
+          },
+        );
+        if (r.mode === 'queue' && r.enqueued) {
+          factsQueued = { queued: true };
+        } else if (r.mode === 'queue' && r.skipped) {
+          // Preserve the pre-v0.31.2 response shape for MCP clients:
+          // 'kind:guide' / 'too_short' / 'subagent_namespace' / 'dream_generated'
+          // (bare reasons), not the helper's namespaced 'eligibility_failed:...'
+          // discriminator. Map back here.
+          const bare = r.skipped.startsWith('eligibility_failed:')
+            ? r.skipped.slice('eligibility_failed:'.length)
+            : r.skipped;
+          factsQueued = { skipped: bare };
+        }
+      } catch {
+        factsQueued = { skipped: 'backstop_error' };
       }
-    } catch {
-      factsQueued = { skipped: 'backstop_error' };
     }
 
     // v0.42.x (#2390): Life Chronicle backstop. ONLY on a real import
@@ -1184,7 +1346,13 @@ const put_page: Operation = {
     let writerLint: { error_count: number; warning_count: number } | { skipped: string } | undefined;
     try {
       const { runPostWriteLint } = await import('./output/post-write.ts');
-      const lint = await runPostWriteLint(ctx.engine, result.slug);
+      const lint = await runPostWriteLint(ctx.engine, result.slug, {
+        ...(ctx.sourceId ? { sourceId: ctx.sourceId } : {}),
+        // Remote writes are durable in the database only. Keep the lint audit
+        // in the caller's source, but never let a network request append to a
+        // host-local JSONL file.
+        noLocalLog: ctx.remote !== false,
+      });
       if (lint.ran) {
         writerLint = {
           error_count: lint.findings.filter(f => f.severity === 'error').length,
@@ -1404,7 +1572,7 @@ const delete_page: Operation = {
     slug: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
     if (ctx.dryRun) return { dry_run: true, action: 'soft_delete_page', slug };
@@ -1437,7 +1605,7 @@ const restore_page: Operation = {
     slug: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
     if (ctx.dryRun) return { dry_run: true, action: 'restore_page', slug };
@@ -2079,10 +2247,11 @@ const add_tag: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug: p.slug, tag: p.tag };
+    const slug = enforceOAuthWriteSlugFence(ctx, p.slug as string, 'add_tag');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_tag', slug, tag: p.tag };
     // v0.31.8 (D7): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.addTag(p.slug as string, p.tag as string, sourceOpts);
+    await ctx.engine.addTag(slug, p.tag as string, sourceOpts);
     return { status: 'ok' };
   },
   cliHints: { name: 'tag', positional: ['slug', 'tag'] },
@@ -2090,13 +2259,13 @@ const add_tag: Operation = {
 
 const remove_tag: Operation = {
   name: 'remove_tag',
-  description: 'Remove tag from page',
+  description: 'Admin-only: remove a tag from a page',
   params: {
     slug: { type: 'string', required: true },
     tag: { type: 'string', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'remove_tag', slug: p.slug, tag: p.tag };
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
@@ -2151,7 +2320,12 @@ const add_link: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    if (ctx.dryRun) return { dry_run: true, action: 'add_link', from: p.from, to: p.to };
+    // Both endpoints affect graph topology and ranking. A routine OAuth
+    // writer must own both namespaces; fencing only `from` would let an
+    // intake client poison arbitrary targets through backlinks.
+    const from = enforceOAuthWriteSlugFence(ctx, p.from as string, 'add_link');
+    const to = enforceOAuthWriteSlugFence(ctx, p.to as string, 'add_link');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_link', from, to };
     // v114 (#1941): default omitted provenance to 'manual' (NOT the engine's
     // 'markdown' default) so hand/tool-created CLI edges are honestly manual,
     // and forbid forging the reconciliation-managed built-ins.
@@ -2169,7 +2343,7 @@ const add_link: Operation = {
       ? { fromSourceId: ctx.sourceId, toSourceId: ctx.sourceId, originSourceId: ctx.sourceId }
       : undefined;
     await ctx.engine.addLink( // gbrain-allow-direct-insert: add_link MCP op is the explicit canonical surface for manual link creation; auto-link reconciliation runs separately via auto_link post-hook
-      p.from as string, p.to as string,
+      from, to,
       (p.context as string) || '', (p.link_type as string) || '',
       linkSource, undefined, undefined,
       linkOpts,
@@ -2181,7 +2355,7 @@ const add_link: Operation = {
 
 const remove_link: Operation = {
   name: 'remove_link',
-  description: 'Remove link between pages',
+  description: 'Admin-only: remove a link between pages',
   params: {
     from: { type: 'string', required: true },
     to: { type: 'string', required: true },
@@ -2189,7 +2363,7 @@ const remove_link: Operation = {
     link_source: { type: 'string', description: 'Only remove edges of this provenance (e.g. citation-graph); omit = any provenance' },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'remove_link', from: p.from, to: p.to };
     const linkOpts = ctx.sourceId
@@ -2317,8 +2491,10 @@ const add_timeline_entry: Operation = {
     // subagent-allowlisted (brain-allowlist.ts), so timeline writes must be
     // confined to the same namespace/allow-list as page writes. Runs before
     // the dry-run short-circuit so preview calls surface the same rejection.
-    enforceSubagentSlugFence(ctx, p.slug as string, 'add_timeline_entry');
-    if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug: p.slug };
+    const slug = canonicalizeOperationSlug(p.slug as string, 'add_timeline_entry');
+    enforceSubagentSlugFence(ctx, slug, 'add_timeline_entry');
+    enforceOAuthWriteSlugFence(ctx, slug, 'add_timeline_entry');
+    if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug };
     const date = p.date as string;
     // Reject anything that isn't a strict YYYY-MM-DD with year 1900-2199 and
     // a real calendar day. PG DATE accepts year 5874897 silently — that's a
@@ -2337,7 +2513,7 @@ const add_timeline_entry: Operation = {
     }
     // v0.31.8 (D7): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.addTimelineEntry(p.slug as string, { // gbrain-allow-direct-insert: add_timeline_entry MCP op is the explicit canonical surface for manual timeline entries
+    await ctx.engine.addTimelineEntry(slug, { // gbrain-allow-direct-insert: add_timeline_entry MCP op is the explicit canonical surface for manual timeline entries
       date,
       source: (p.source as string) || '',
       summary: p.summary as string,
@@ -2706,13 +2882,13 @@ const get_versions: Operation = {
 
 const revert_version: Operation = {
   name: 'revert_version',
-  description: 'Revert page to a previous version',
+  description: 'Admin-only: revert a page to a previous version',
   params: {
     slug: { type: 'string', required: true },
     version_id: { type: 'number', required: true },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'revert_version', slug: p.slug, version_id: p.version_id };
     // v0.31.8 (D7): thread ctx.sourceId so multi-source brains revert the
@@ -2767,10 +2943,11 @@ const put_raw_data: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    if (ctx.dryRun) return { dry_run: true, action: 'put_raw_data', slug: p.slug, source: p.source };
+    const slug = enforceOAuthWriteSlugFence(ctx, p.slug as string, 'put_raw_data');
+    if (ctx.dryRun) return { dry_run: true, action: 'put_raw_data', slug, source: p.source };
     // v0.31.8 (D7 + D21): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    await ctx.engine.putRawData(p.slug as string, p.source as string, p.data as object, sourceOpts);
+    await ctx.engine.putRawData(slug, p.source as string, p.data as object, sourceOpts);
     return { status: 'ok' };
   },
 };
@@ -2836,7 +3013,50 @@ const log_ingest: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
-    if (ctx.dryRun) return { dry_run: true, action: 'log_ingest' };
+    const pagesUpdated = (p.pages_updated as string[]).map(
+      slug => canonicalizeOperationSlug(slug, 'log_ingest'),
+    );
+    // Unlike a page-targeting op, an empty pages_updated array gives the
+    // namespace fence no slug to validate. Do not let a routine remote OAuth
+    // writer use that vacuous loop to append unscoped global audit records.
+    // Admin and trusted-local callers retain the historical empty-log escape
+    // hatch for operator bookkeeping.
+    if (
+      ctx.remote !== false
+      && ctx.transport !== 'stdio'
+      && pagesUpdated.length === 0
+    ) {
+      if (!ctx.auth) {
+        throw new OperationError(
+          'permission_denied',
+          'log_ingest requires an authenticated remote identity.',
+          'Fix the transport so it threads ctx.auth; do not retry with an unscoped remote caller.',
+        );
+      }
+      if (ctx.auth.scopes.includes('admin')) {
+        // Explicit operator escape hatch: admin may append bookkeeping events
+        // that do not claim any page mutation.
+      } else if (!ctx.auth.writeSlugPrefixes || ctx.auth.writeSlugPrefixes.length === 0) {
+        throw new OperationError(
+          'permission_denied',
+          'log_ingest requires an OAuth write namespace; this client has no bound_slug_prefixes.',
+          'Re-register the client with --bound-slug-prefixes "inbox/client-name/*".',
+        );
+      } else {
+        throw new OperationError(
+          'invalid_params',
+          'log_ingest requires at least one pages_updated slug for a routine remote OAuth writer.',
+          'Name at least one page inside the client write namespace.',
+        );
+      }
+    }
+    // pages_updated is part of the durable ingestion audit trail. Fence every
+    // referenced page so a namespace-bound client cannot claim arbitrary
+    // pages were updated.
+    for (const slug of pagesUpdated) {
+      enforceOAuthWriteSlugFence(ctx, slug, 'log_ingest');
+    }
+    if (ctx.dryRun) return { dry_run: true, action: 'log_ingest', pages_updated: pagesUpdated };
     await ctx.engine.logIngest({
       // Thread ctx.sourceId (same pattern as get_chunks/get_page above): on a
       // multi-source brain the ingest event must be attributed to the caller's
@@ -2845,7 +3065,7 @@ const log_ingest: Operation = {
       ...(ctx.sourceId ? { source_id: ctx.sourceId } : {}),
       source_type: p.source_type as string,
       source_ref: p.source_ref as string,
-      pages_updated: p.pages_updated as string[],
+      pages_updated: pagesUpdated,
       summary: p.summary as string,
     });
     return { status: 'ok' };
@@ -3116,7 +3336,7 @@ const submit_agent: Operation = {
     prompt: { type: 'string', required: true, description: 'User prompt for the agent' },
     model: { type: 'string', description: 'provider:model string (defaults to models.tier.subagent)' },
     allowed_tools: { type: 'array', description: 'Subset of bound_tools the agent may invoke', items: { type: 'string' } },
-    allowed_slug_prefixes: { type: 'array', description: 'Subset of bound_slug_prefixes for put_page writes', items: { type: 'string' } },
+    allowed_slug_prefixes: { type: 'array', description: 'Subset of bound_slug_prefixes for delegated slug writes', items: { type: 'string' } },
     max_turns: { type: 'number', description: 'Max LLM turns (default 20, hard cap 100)' },
     queue: { type: 'string', description: 'Queue name (default "default")' },
   },
@@ -3171,6 +3391,14 @@ const submit_agent: Operation = {
     }
 
     // Validate each param against the binding.
+    if (p.allowed_tools !== undefined) {
+      if (!Array.isArray(p.allowed_tools) || p.allowed_tools.length === 0) {
+        throw new OperationError(
+          'invalid_params',
+          'submit_agent: allowed_tools must be a non-empty array when supplied. Omit it to use the registered bound_tools.',
+        );
+      }
+    }
     const requestedTools = (p.allowed_tools as string[] | undefined) ?? boundTools;
     for (const t of requestedTools) {
       if (!boundTools.includes(t)) {
@@ -3180,16 +3408,37 @@ const submit_agent: Operation = {
         );
       }
     }
-    const requestedSlugPrefixes = (p.allowed_slug_prefixes as string[] | undefined) ?? boundSlugPrefixes ?? [];
-    if (boundSlugPrefixes !== null) {
-      for (const sp of requestedSlugPrefixes) {
-        if (!boundSlugPrefixes.some(bp => sp.startsWith(bp) || bp === sp)) {
-          throw new OperationError(
-            'permission_denied',
-            `submit_agent: slug_prefix "${sp}" is not under any of client ${clientId}'s bound_slug_prefixes.`,
-          );
-        }
+    if (p.allowed_slug_prefixes !== undefined) {
+      if (!Array.isArray(p.allowed_slug_prefixes) || p.allowed_slug_prefixes.length === 0) {
+        throw new OperationError(
+          'invalid_params',
+          'submit_agent: allowed_slug_prefixes must be a non-empty array when supplied. Omit it to use the registered bound_slug_prefixes.',
+        );
       }
+    }
+    const requestedSlugPrefixes = (p.allowed_slug_prefixes as string[] | undefined) ?? boundSlugPrefixes ?? [];
+    for (const sp of requestedSlugPrefixes) {
+      if (
+        typeof sp !== 'string'
+        || !boundSlugPrefixes
+        || !boundSlugPrefixes.some(bp => isSlugGrantContained(sp, bp))
+      ) {
+        throw new OperationError(
+          'permission_denied',
+          `submit_agent: slug_prefix "${String(sp)}" is not under any of client ${clientId}'s bound_slug_prefixes.`,
+        );
+      }
+    }
+    const delegatedWriteTools = new Set(['put_page', 'add_timeline_entry']);
+    if (
+      requestedSlugPrefixes.length === 0
+      && requestedTools.some(tool => delegatedWriteTools.has(tool.replace(/^brain_/, '')))
+    ) {
+      throw new OperationError(
+        'permission_denied',
+        `submit_agent: client ${clientId} requested write-capable tools but has no delegated slug namespace.`,
+        'Register bound_slug_prefixes or dispatch only read-only tools.',
+      );
     }
 
     // Concurrency cap: count active+waiting agent jobs for this client.
@@ -3863,10 +4112,11 @@ const get_recent_transcripts: Operation = {
   },
   handler: async (ctx, p) => {
     // Trust gate (eng review D2 + codex C3): MCP / HTTP callers (`remote=true`)
-    // are blocked. Local CLI callers (`remote=false`) and the trusted-workspace
-    // dream cycle pass through. This op is intentionally NOT in the subagent
-    // allow-list (subagents always run with remote=true; they would always be
-    // rejected, which is a footgun if the op is visible).
+    // are blocked. Local CLI callers (`remote=false`) pass through. The dream
+    // cycle discovers transcripts directly instead of exposing this op. It is
+    // intentionally NOT in the subagent allow-list (subagents always run with
+    // remote=true; they would always be rejected, which is a footgun if the
+    // op is visible).
     if (ctx.remote === true) {
       throw new OperationError(
         'permission_denied',
@@ -3889,7 +4139,7 @@ const whoami: Operation = {
   name: 'whoami',
   description:
     'Introspect the calling identity. Returns one of three transport shapes: ' +
-    '{transport: "oauth", client_id, client_name, scopes, expires_at, source_id, federated_read}, ' +
+    '{transport: "oauth", client_id, client_name, scopes, expires_at, source_id, federated_read, write_slug_prefixes}, ' +
     '{transport: "legacy", token_name, scopes, expires_at: null}, or ' +
     '{transport: "local", scopes: []}, or {transport: "stdio", scopes: []} ' +
     'for the auth-less stdio MCP pipe. Throws unknown_transport when the ' +
@@ -3935,6 +4185,7 @@ const whoami: Operation = {
         // widens nothing; absent grants serialize fail-closed (null / []).
         source_id: ctx.auth.sourceId ?? null,
         federated_read: ctx.auth.allowedSources ?? [],
+        write_slug_prefixes: ctx.auth.writeSlugPrefixes ?? [],
       };
     }
     return {
@@ -4113,7 +4364,11 @@ const extract_facts: Operation = {
     visibility: { type: 'string', description: 'Default visibility for extracted facts. private (default) | world.' },
   },
   mutating: true,
-  scope: 'write',
+  // The extractor chooses entity slugs after the request crosses the OAuth
+  // boundary, so an input-only prefix check cannot prove the output stays in
+  // namespace. Keep this privileged until the extraction pipeline validates
+  // every emitted entity slug against the caller's grant.
+  scope: 'admin',
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'extract_facts' };
     const { isFactsExtractionEnabled } = await import('./facts/extract.ts');
@@ -4272,13 +4527,16 @@ const recall: Operation = {
 
 const forget_fact: Operation = {
   name: 'forget_fact',
-  description: 'v0.32.2: forget a fact. Rewrites the page\'s `## Facts` fence to strike through the row and set valid_until=today (the DB\'s expired_at derives via valid_until + now() on the next reconcile so the forget survives `gbrain rebuild`). Falls back to legacy DB-only expire for pre-v51 / thin-client rows. Idempotent on already-expired or unknown ids.',
+  description: 'v0.32.2: local admin-only fact deletion. Rewrites the page\'s `## Facts` fence to strike through the row and set valid_until=today (the DB\'s expired_at derives via valid_until + now() on the next reconcile so the forget survives `gbrain rebuild`). Falls back to legacy DB-only expire for pre-v51 / thin-client rows. Idempotent on already-expired or unknown ids.',
   params: {
     id: { type: 'number', required: true, description: 'Fact id to forget.' },
     reason: { type: 'string', required: false, description: 'Optional reason; written to the fence row\'s context cell as "forgotten: <reason>". Default: "forgotten".' },
   },
   mutating: true,
-  scope: 'write',
+  scope: 'admin',
+  // The durable path rewrites sources.local_path. Until the mirror is
+  // redesigned as a remote-safe DB-only operation, never expose it over HTTP.
+  localOnly: true,
   handler: async (ctx, p) => {
     if (ctx.dryRun) return { dry_run: true, action: 'forget_fact', id: p.id };
     const id = p.id as number;
@@ -4575,6 +4833,10 @@ const search_by_image: Operation = {
     source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId. '__all__' spans every source for trusted local callers, your granted sources for remote callers." },
   },
   scope: 'read',
+  // Unlike normal brain retrieval, image_url intentionally fetches an
+  // external resource (behind the SSRF guard), so advertise this read tool as
+  // open-world instead of inheriting the closed-brain default.
+  mcpOpenWorld: true,
   // NOT localOnly: remote MCP callers can pass image_url or image_data
   // (subject to D18 image_path ban + D12 size cap + D23-#6 spend cap).
   handler: async (ctx, p) => {
@@ -5456,8 +5718,17 @@ const ontology_propose: Operation = {
     visibility: { type: 'string', enum: ['private', 'world'], description: 'Default private.' },
   },
   handler: async (ctx, p) => {
+    const entity = enforceOAuthWriteSlugFence(ctx, String(p.entity), 'ontology_propose');
+    if (ctx.dryRun) {
+      return {
+        dry_run: true,
+        action: 'ontology_propose',
+        entity,
+        dimension: p.dimension,
+      };
+    }
     return ctx.engine.mergeOntologyFact({
-      entitySlug: String(p.entity),
+      entitySlug: entity,
       dimension: String(p.dimension),
       value: String(p.value),
       confidence: typeof p.confidence === 'number' ? p.confidence : undefined,

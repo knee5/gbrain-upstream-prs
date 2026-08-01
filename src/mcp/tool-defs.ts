@@ -1,4 +1,6 @@
 import type { Operation, ParamDef } from '../core/operations.ts';
+import { hasScope } from '../core/scope.ts';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 
 export interface McpToolDef {
   name: string;
@@ -8,6 +10,26 @@ export interface McpToolDef {
     properties: Record<string, unknown>;
     required: string[];
   };
+  annotations?: ToolAnnotations;
+}
+
+const CLOSED_READ_TOOL_ANNOTATIONS: Readonly<ToolAnnotations> = Object.freeze({
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+});
+
+/**
+ * Filter the advertised operation catalog to capabilities the authenticated
+ * client can actually call. Call-time scope enforcement remains mandatory;
+ * this only keeps unavailable tools out of tools/list.
+ */
+export function filterOperationsForScopes(
+  ops: readonly Operation[],
+  grantedScopes: readonly string[],
+): Operation[] {
+  return ops.filter(op => hasScope(grantedScopes, op.scope ?? 'read'));
 }
 
 /**
@@ -50,5 +72,13 @@ export function buildToolDefs(ops: Operation[]): McpToolDef[] {
         .filter(([, v]) => v.required)
         .map(([k]) => k),
     },
+    ...((op.scope ?? 'read') === 'read' && op.mutating !== true
+      ? {
+          annotations: {
+            ...CLOSED_READ_TOOL_ANNOTATIONS,
+            openWorldHint: op.mcpOpenWorld === true,
+          },
+        }
+      : {}),
   }));
 }

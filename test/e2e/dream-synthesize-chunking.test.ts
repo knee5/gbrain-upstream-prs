@@ -240,11 +240,15 @@ describe('E2E synthesize chunking — fan-out shape', () => {
       });
 
       const expectedKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
-      const rows = await rig.engine.executeRaw<{ idempotency_key: string }>(
-        `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
+      const rows = await rig.engine.executeRaw<{ idempotency_key: string; data: Record<string, unknown> | string }>(
+        `SELECT idempotency_key, data FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].idempotency_key).toBe(expectedKey);
+      const jobData = typeof rows[0].data === 'string'
+        ? JSON.parse(rows[0].data)
+        : rows[0].data;
+      expect(jobData.trusted_workspace).toBe(true);
       // Specifically: legacy key shape has NO ":c<idx>of<n>" suffix.
       expect(rows[0].idempotency_key).not.toMatch(/:c\d+of\d+$/);
     } finally {

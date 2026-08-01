@@ -257,6 +257,7 @@ function RegisterModal({ onClose, onRegistered }: {
     Object.fromEntries(ALLOWED_SCOPES_LIST.map(s => [s, s === 'read'])) as Record<Scope, boolean>,
   );
   const [ttl, setTtl] = useState('86400'); // 24h default
+  const [slugPrefixes, setSlugPrefixes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -277,13 +278,29 @@ function RegisterModal({ onClose, onRegistered }: {
     try {
       // Use the CLI registration endpoint (POST to admin API)
       const selectedScopes = Object.entries(scopes).filter(([, v]) => v).map(([k]) => k).join(' ');
+      const boundSlugPrefixes = slugPrefixes
+        .split(/[,\n]/)
+        .map(value => value.trim())
+        .filter(Boolean);
+      if (scopes.write && !scopes.admin && boundSlugPrefixes.length === 0) {
+        setError('Write scope requires at least one slug prefix, such as inbox/chatgpt/*.');
+        return;
+      }
       const res = await fetch('/admin/api/register-client', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), scopes: selectedScopes, tokenTtl: ttl === '0' ? 315360000 : Number(ttl) }),
+        body: JSON.stringify({
+          name: name.trim(),
+          scopes: selectedScopes,
+          tokenTtl: ttl === '0' ? 315360000 : Number(ttl),
+          boundSlugPrefixes,
+        }),
       });
-      if (!res.ok) throw new Error('Registration failed');
+      if (!res.ok) {
+        const failure = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        throw new Error(failure?.message || failure?.error || 'Registration failed');
+      }
       const data = await res.json();
       onRegistered({ clientId: data.clientId, clientSecret: data.clientSecret, name: name.trim() });
     } catch (err) {
@@ -296,7 +313,7 @@ function RegisterModal({ onClose, onRegistered }: {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <div className="modal-title">Register Agent</div>
+        <div className="modal-title">Register OAuth Client</div>
         <div style={{ marginBottom: 16 }}>
           <label>Agent Name</label>
           <input placeholder="e.g. perplexity-production" value={name} onChange={e => setName(e.target.value)} autoFocus />
@@ -312,6 +329,33 @@ function RegisterModal({ onClose, onRegistered }: {
             ))}
           </div>
         </div>
+        {(scopes.write || slugPrefixes.length > 0) && (
+          <div style={{ marginBottom: 16 }}>
+            <label>
+              Write Slug Prefixes
+              {scopes.write && !scopes.admin ? ' (required)' : ''}
+            </label>
+            <textarea
+              placeholder={'inbox/chatgpt/*\nprojects/acme-example/*'}
+              value={slugPrefixes}
+              onChange={e => setSlugPrefixes(e.target.value)}
+              rows={3}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '8px 10px',
+                fontSize: 14,
+              }}
+            />
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 5 }}>
+              One exact slug or trailing /* namespace per line. Commas also work.
+            </div>
+          </div>
+        )}
         <div style={{ marginBottom: 20 }}>
           <label>Token Lifetime</label>
           <select value={ttl} onChange={e => setTtl(e.target.value)}

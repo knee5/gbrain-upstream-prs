@@ -64,7 +64,7 @@ export const BRAIN_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   'put_page',
   // #2778: the canonical timeline-write op. Fenced exactly like put_page —
   // operations.ts:enforceSubagentSlugFence confines the target slug to the
-  // trusted-workspace allow-list (or the wiki/agents/<id>/ namespace) when
+  // delegated write allow-list (or the wiki/agents/<id>/ namespace) when
   // ctx.viaSubagent=true, so a subagent can only append timeline entries to
   // pages it could have written anyway.
   'add_timeline_entry',
@@ -139,12 +139,14 @@ function paramsToInputSchema(op: Operation): Record<string, unknown> {
  * For put_page specifically, the tool schema shown to the model constrains
  * `slug`. Two modes:
  *
- *  - Default (legacy): slug MUST start with `wiki/agents/<subagentId>/`,
+ *  - Default (legacy, field omitted): slug MUST start with
+ *    `wiki/agents/<subagentId>/`,
  *    enforced by both the JSONSchema `pattern` and the server-side check.
- *  - Trusted-workspace (v0.23 dream cycle): when `allowedSlugPrefixes` is
+ *  - Delegated namespace: when `allowedSlugPrefixes` is
  *    set, the model is told the allowed prefixes in plain English (no
  *    regex pattern — the prefix list is authoritative server-side, and
  *    JSONSchema can't express "matches any of these globs" cleanly).
+ *    An explicit empty list is deny-all, not the legacy fallback.
  */
 function namespacedPutPageSchema(
   op: Operation,
@@ -154,12 +156,18 @@ function namespacedPutPageSchema(
   const base = paramsToInputSchema(op);
   const props = (base.properties as Record<string, Record<string, unknown>>) ?? {};
   if (props.slug) {
-    if (allowedSlugPrefixes && allowedSlugPrefixes.length > 0) {
+    if (allowedSlugPrefixes !== undefined && allowedSlugPrefixes.length > 0) {
       props.slug = {
         ...props.slug,
         description:
           `Page slug. MUST match one of these prefix globs: ${allowedSlugPrefixes.join(', ')}. ` +
           `Slugs use lowercase alphanumeric segments separated by '/'. No leading slash, no '.md' extension, no underscores.`,
+      };
+    } else if (allowedSlugPrefixes !== undefined) {
+      props.slug = {
+        ...props.slug,
+        description: 'Page slug. This delegated job has no authorized write namespace.',
+        pattern: 'a^',
       };
     } else {
       props.slug = {
@@ -195,18 +203,21 @@ export interface BuildBrainToolsOpts {
    */
   brainId?: string;
   /**
-   * Trusted-workspace allow-list (v0.23). When set, put_page is bounded
-   * to slugs matching these prefix globs instead of the legacy
-   * `wiki/agents/<id>/...` namespace. Trust comes from PROTECTED_JOB_NAMES
-   * (MCP can't submit subagent jobs) — this flows from
-   * SubagentHandlerData.allowed_slug_prefixes via the handler.
+   * Per-job write namespace. An explicit empty list is deny-all; only
+   * omission selects the legacy wiki/agents/<id>/ lane.
    */
   allowedSlugPrefixes?: readonly string[];
   /**
+   * Internal protected-cycle provenance. This is deliberately independent
+   * from allowedSlugPrefixes because remote OAuth jobs also carry bounded
+   * slug grants.
+   */
+  trustedWorkspace?: boolean;
+  /**
    * Brain source every tool-call OperationContext is scoped to (#1586).
-   * Trusted (flows from SubagentHandlerData.source_id, which only
-   * PROTECTED_JOB_NAMES-gated submitters can set); validated at build time.
-   * Unset → legacy 'default'.
+   * Remote OAuth jobs may receive a registration-bound source through
+   * submit_agent; protected cycle jobs receive the cycle-resolved source.
+   * Validated at build time. Unset → legacy 'default'.
    */
   sourceId?: string;
 }
@@ -219,6 +230,7 @@ interface OpContextDeps {
   signal?: AbortSignal;
   brainId?: string;
   allowedSlugPrefixes?: readonly string[];
+  trustedWorkspace?: boolean;
   sourceId?: string;
 }
 
@@ -239,9 +251,10 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     subagentId: deps.subagentId,
     viaSubagent: true,           // FAIL-CLOSED: put_page etc. enforce namespace
     brainId: deps.brainId,
-    allowedSlugPrefixes: deps.allowedSlugPrefixes
-      ? [...deps.allowedSlugPrefixes]
-      : undefined,
+    allowedSlugPrefixes: deps.allowedSlugPrefixes === undefined
+      ? undefined
+      : [...deps.allowedSlugPrefixes],
+    trustedWorkspace: deps.trustedWorkspace === true,
   };
 }
 
@@ -253,6 +266,12 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
  * subagentId + engine handle, so it's not shareable across jobs.
  */
 export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
+  if (
+    opts.trustedWorkspace === true
+    && (opts.allowedSlugPrefixes === undefined || opts.allowedSlugPrefixes.length === 0)
+  ) {
+    throw new Error('trusted-workspace subagent tools require a non-empty write namespace');
+  }
   const filter = opts.allowedNames ?? BRAIN_TOOL_ALLOWLIST;
   const picked: Operation[] = operations.filter(
     op => BRAIN_TOOL_ALLOWLIST.has(op.name) && filter.has(op.name),
@@ -292,6 +311,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           signal: ctx.signal,
           brainId: opts.brainId,
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
+          trustedWorkspace: opts.trustedWorkspace,
           sourceId: opts.sourceId,
         });
         const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};

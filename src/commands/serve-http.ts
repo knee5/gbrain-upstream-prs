@@ -24,13 +24,22 @@ import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { OAuthTokenRevocationRequestSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { BrainEngine } from '../core/engine.ts';
-import { operations, OperationError } from '../core/operations.ts';
+import {
+  operations,
+  OperationError,
+  enforceOAuthWriteSlugForAuth,
+} from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
 import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
-import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
+import {
+  hasScope,
+  ALLOWED_SCOPES_LIST,
+  normalizeBoundSlugPrefixesInput,
+  normalizeScopesInput,
+} from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
-import { paramDefToSchema } from '../mcp/tool-defs.ts';
+import { buildToolDefs, filterOperationsForScopes } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
@@ -129,6 +138,130 @@ export function resolveOAuthTokenRateLimit(env: NodeJS.ProcessEnv = process.env)
     windowMs: parsePositiveIntEnv(env.GBRAIN_OAUTH_TOKEN_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: parsePositiveIntEnv(env.GBRAIN_OAUTH_TOKEN_RATE_LIMIT_MAX, 50),
   };
+}
+
+/**
+ * Resolve the page slug used by POST /ingest.
+ *
+ * A caller-provided X-Gbrain-Slug must fit the OAuth client's persisted
+ * write namespace. When a routine writer omits the header, generate the
+ * stable date/hash suffix beneath its first wildcard namespace instead of
+ * falling back to the global inbox. Exact-slug-only grants cannot safely
+ * synthesize a child slug, so those callers must provide the header.
+ *
+ * Admin keeps the legacy global-inbox default as the explicit operator
+ * escape hatch.
+ */
+export function resolveOAuthIngestSlug(
+  authInfo: AuthInfo,
+  callerSlug: string | undefined,
+  contentHash: string,
+  now: Date = new Date(),
+): string {
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  const suffix = `${y}-${m}-${d}-${contentHash.slice(0, 6)}`;
+
+  let slug = callerSlug;
+  if (!slug) {
+    if (authInfo.scopes.includes('admin')) {
+      slug = `inbox/${suffix}`;
+    } else {
+      const namespace = authInfo.writeSlugPrefixes?.find(
+        prefix => prefix.endsWith('/*') || prefix.endsWith('/'),
+      );
+      if (!namespace) {
+        // Preserve the canonical missing-namespace error when no binding was
+        // loaded. An exact-only grant is different: it is usable, but needs
+        // an explicit header because there is no child namespace to derive.
+        if (!authInfo.writeSlugPrefixes || authInfo.writeSlugPrefixes.length === 0) {
+          enforceOAuthWriteSlugForAuth(authInfo, `inbox/${suffix}`, 'webhook_ingest');
+        }
+        throw new OperationError(
+          'invalid_params',
+          'POST /ingest cannot derive a slug from an exact-only OAuth write namespace.',
+          'Set X-Gbrain-Slug to an allowed exact slug or register a trailing /* namespace.',
+        );
+      }
+      const namespaceBase = namespace.endsWith('/*')
+        ? namespace.slice(0, -2)
+        : namespace.slice(0, -1);
+      slug = `${namespaceBase}/${suffix}`;
+    }
+  }
+
+  // Registration-time namespace bindings use the canonical page-slug
+  // grammar (`validateSlug` via normalizeBoundSlugPrefixesInput), which
+  // intentionally accepts dots/underscores and lowercases values. Reuse that
+  // exact grammar here so a valid binding can always be exercised by
+  // POST /ingest and mixed-case caller input is compared canonically.
+  let normalizedSlug: string;
+  try {
+    const normalized = normalizeBoundSlugPrefixesInput([slug]);
+    normalizedSlug = normalized[0] ?? '';
+    if (!normalizedSlug || normalizedSlug.endsWith('/*')) {
+      throw new Error('a page slug must be exact, not a trailing /* namespace');
+    }
+  } catch (e) {
+    throw new OperationError(
+      'invalid_params',
+      `Invalid POST /ingest page slug: ${e instanceof Error ? e.message : String(e)}`,
+      'Use an exact slug accepted by bound_slug_prefixes; do not use traversal or wildcard syntax.',
+    );
+  }
+  enforceOAuthWriteSlugForAuth(authInfo, normalizedSlug, 'webhook_ingest');
+  return normalizedSlug;
+}
+
+/**
+ * Build the queue payload for an OAuth-authenticated POST /ingest request.
+ *
+ * `event.source_id` is caller-controlled provenance (X-Gbrain-Source-Id) and
+ * MUST NOT select the database source that receives the page. The write target
+ * comes exclusively from the source grant resolved during bearer-token
+ * verification. Keeping it as a separate, server-stamped job field lets the
+ * asynchronous worker preserve the authenticated source boundary after the
+ * HTTP request has ended.
+ *
+ * Undefined source grants are legacy/default clients. This matches the HTTP
+ * MCP dispatch path, which maps those clients to the built-in `default` source.
+ */
+export function buildOAuthIngestCaptureJobData(
+  authInfo: AuthInfo,
+  event: IngestionEvent,
+  slug: string,
+): {
+  event: IngestionEvent;
+  slug: string;
+  target_source_id: string;
+  oauth_ingest_payload_version: 2;
+} {
+  return {
+    event,
+    slug,
+    target_source_id: authInfo.sourceId ?? 'default',
+    // Version the authenticated queue envelope, not the public ingestion
+    // event. The worker can now distinguish newly emitted jobs (which must
+    // carry the server stamp) from already-queued pre-upgrade jobs.
+    oauth_ingest_payload_version: 2,
+  };
+}
+
+/**
+ * Queue identity for OAuth webhook ingest.
+ *
+ * The resolved page slug is part of the logical write. Identical content sent
+ * to two allowed slugs must produce two jobs; otherwise the queue returns the
+ * first job while the HTTP response falsely reports the second slug.
+ */
+export function buildOAuthIngestIdempotencyKey(
+  authInfo: AuthInfo,
+  targetSourceId: string,
+  resolvedSlug: string,
+  contentHash: string,
+): string {
+  return `ingest:webhook:${authInfo.clientId}:${targetSourceId}:${resolvedSlug}:${contentHash}`;
 }
 
 export type ProbeHealthResult =
@@ -1511,6 +1644,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       // missing, empty) and rejects the rest with a structured 400.
       const { name, tokenTtl, grantTypes, redirectUris, tokenEndpointAuthMethod } = req.body;
       const rawScopes = (req.body as Record<string, unknown>).scopes ?? (req.body as Record<string, unknown>).scope;
+      const rawBoundSlugPrefixes =
+        (req.body as Record<string, unknown>).boundSlugPrefixes
+        ?? (req.body as Record<string, unknown>).bound_slug_prefixes;
       if (!name) { res.status(400).json({ error: 'Name required' }); return; }
       let scopeString: string;
       try {
@@ -1519,6 +1655,31 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         res.status(400).json({
           error: 'invalid_scopes',
           message: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      let boundSlugPrefixes: string[];
+      try {
+        boundSlugPrefixes = normalizeBoundSlugPrefixesInput(rawBoundSlugPrefixes);
+      } catch (e) {
+        res.status(400).json({
+          error: 'invalid_bound_slug_prefixes',
+          message: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      // Routine OAuth writers fail closed at operation time when they have no
+      // namespace. Refuse to mint an immediately unusable dashboard client:
+      // admin remains the explicit operator escape hatch.
+      const selectedScopes = new Set(scopeString.split(' ').filter(Boolean));
+      if (
+        selectedScopes.has('write')
+        && !selectedScopes.has('admin')
+        && boundSlugPrefixes.length === 0
+      ) {
+        res.status(400).json({
+          error: 'bound_slug_prefixes_required',
+          message: 'Non-admin OAuth clients with write scope require at least one write slug prefix.',
         });
         return;
       }
@@ -1542,13 +1703,24 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         return;
       }
       const result = await oauthProvider.registerClientManual(
-        name, grants, scopeString, uris, 'default', undefined, validatedAuthMethod,
+        name,
+        grants,
+        scopeString,
+        uris,
+        'default',
+        undefined,
+        validatedAuthMethod,
+        boundSlugPrefixes.length > 0 ? { boundSlugPrefixes } : undefined,
       );
       // Set per-client TTL if specified
       if (tokenTtl && Number(tokenTtl) > 0) {
         await sql`UPDATE oauth_clients SET token_ttl = ${Number(tokenTtl)} WHERE client_id = ${result.clientId}`;
       }
-      res.json({ ...result, tokenTtl: tokenTtl ? Number(tokenTtl) : null });
+      res.json({
+        ...result,
+        tokenTtl: tokenTtl ? Number(tokenTtl) : null,
+        boundSlugPrefixes,
+      });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Registration failed' });
     }
@@ -1719,6 +1891,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       { name: 'gbrain', version: VERSION },
       { capabilities: { tools: {} } },
     );
+    const advertisedOperations = filterOperationsForScopes(mcpOperations, authInfo.scopes);
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       // v0.28.10: log every JSON-RPC method, not just successful tools/call.
@@ -1744,17 +1917,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         timestamp: new Date().toISOString(),
       });
       return {
-        tools: mcpOperations.map(op => ({
-          name: op.name,
-          description: op.description,
-          inputSchema: {
-            type: 'object' as const,
-            properties: Object.fromEntries(
-              Object.entries(op.params).map(([k, v]) => [k, paramDefToSchema(v)]),
-            ),
-            required: Object.entries(op.params).filter(([, v]) => v.required).map(([k]) => k),
-          },
-        })),
+        tools: buildToolDefs(advertisedOperations),
       };
     });
 
@@ -2134,15 +2297,26 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
       const content = body.toString('utf8');
       const contentHash = computeContentHash(content);
-      const sourceUri = (req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${Date.now()}`).slice(0, 1024);
+      const receivedAt = new Date();
+      const sourceUri = (req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${receivedAt.getTime()}`).slice(0, 1024);
       const sourceId = (req.header('x-gbrain-source-id') || `webhook-${authInfo.clientId}`).slice(0, 256);
       const callerSlug = req.header('x-gbrain-slug');
+      let resolvedSlug: string;
+      try {
+        resolvedSlug = resolveOAuthIngestSlug(authInfo, callerSlug, contentHash, receivedAt);
+      } catch (e) {
+        if (e instanceof OperationError) {
+          res.status(e.code === 'permission_denied' ? 403 : 400).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
 
       const event: IngestionEvent = {
         source_id: sourceId,
         source_kind: 'webhook',
         source_uri: sourceUri,
-        received_at: new Date().toISOString(),
+        received_at: receivedAt.toISOString(),
         content_type: contentType,
         content,
         content_hash: contentHash,
@@ -2151,7 +2325,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           ip: req.ip,
           user_agent: req.header('user-agent') ?? '',
           client_id: authInfo.clientId,
-          ...(callerSlug ? { slug: callerSlug } : {}),
+          slug: resolvedSlug,
         },
       };
 
@@ -2166,18 +2340,23 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       }
 
       try {
+        const jobData = buildOAuthIngestCaptureJobData(authInfo, event, resolvedSlug);
         const job = await ingestQueue.add(
           'ingest_capture',
+          jobData,
           {
-            event,
-            ...(callerSlug ? { slug: callerSlug } : {}),
-          },
-          {
-            // Idempotency: same content from the same client within the
-            // queue's lifetime is a single job. Different content gets
-            // different jobs. Daemon-side dedup catches the 24h window;
+            // Idempotency: the logical write includes content, authenticated
+            // client/source, and the resolved target slug. Include all four so
+            // identical content sent to different allowed pages never returns
+            // an older job whose payload points somewhere else. Daemon-side
+            // dedup catches the 24h window;
             // the queue-level idempotency catches simultaneous retries.
-            idempotency_key: `ingest:webhook:${authInfo.clientId}:${contentHash}`,
+            idempotency_key: buildOAuthIngestIdempotencyKey(
+              authInfo,
+              jobData.target_source_id,
+              resolvedSlug,
+              contentHash,
+            ),
             // Cap waiting jobs from a single client so a runaway integration
             // can't fill the queue.
             maxWaiting: 50,
@@ -2206,7 +2385,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         res.status(202).json({
           job_id: job.id,
           content_hash: contentHash,
+          slug: resolvedSlug,
           source_id: sourceId,
+          target_source_id: jobData.target_source_id,
           message: 'Accepted. Event queued for ingestion.',
         });
       } catch (err) {

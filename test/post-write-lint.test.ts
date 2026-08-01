@@ -9,12 +9,13 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { runPostWriteLint, isLintOnPutPageEnabled } from '../src/core/output/post-write.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: BrainEngine;
 let dbDir: string;
@@ -34,6 +35,17 @@ afterAll(async () => {
 async function reset(): Promise<void> {
   await engine.executeRaw('TRUNCATE pages, links, content_chunks, timeline_entries, tags, raw_data, page_versions, ingest_log RESTART IDENTITY CASCADE');
   await engine.executeRaw(`DELETE FROM config WHERE key = 'writer.lint_on_put_page'`);
+}
+
+async function withTempGbrainHome<T>(
+  fn: (root: string) => Promise<T>,
+): Promise<T> {
+  const root = mkdtempSync(join(tmpdir(), 'postwrite-home-'));
+  try {
+    return await withEnv({ GBRAIN_HOME: root }, () => fn(root));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe('isLintOnPutPageEnabled', () => {
@@ -126,5 +138,90 @@ describe('runPostWriteLint', () => {
     const r = await runPostWriteLint(engine, 'people/clean', { noLog: true });
     expect(r.ran).toBe(true);
     expect(r.findings).toEqual([]);
+  });
+
+  test('sourceId reads and audits only the selected non-default source', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('lint-source', 'lint-source')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    // Same slug, deliberately different validation behavior. A bare-slug read
+    // of the default row would skip; the source-scoped row must lint.
+    await engine.putPage('people/scoped', {
+      type: 'person',
+      title: 'Default',
+      compiled_truth: 'Default source is grandfathered.',
+      frontmatter: { validate: false },
+    });
+    await engine.putPage('people/scoped', {
+      type: 'person',
+      title: 'Scoped',
+      compiled_truth: 'Scoped raised $5M in Series A from Sequoia without citation.',
+      frontmatter: {},
+    }, { sourceId: 'lint-source' });
+
+    const r = await runPostWriteLint(engine, 'people/scoped', {
+      force: true,
+      sourceId: 'lint-source',
+      noLog: true,
+    });
+    expect(r.ran).toBe(true);
+    expect(r.findings.some(f => f.validator === 'citation')).toBe(true);
+  });
+
+  test('remote-style noLocalLog keeps a non-default DB audit without a host file', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('remote-lint', 'remote-lint')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage('people/remote-lint', {
+      type: 'person',
+      title: 'Remote',
+      compiled_truth: 'Remote raised $5M in Series A from Sequoia without citation.',
+      frontmatter: {},
+    }, { sourceId: 'remote-lint' });
+
+    await withTempGbrainHome(async (root) => {
+      const r = await runPostWriteLint(engine, 'people/remote-lint', {
+        force: true,
+        sourceId: 'remote-lint',
+        noLocalLog: true,
+      });
+      expect(r.ran).toBe(true);
+      expect(r.findings.length).toBeGreaterThan(0);
+      expect(existsSync(join(root, '.gbrain', 'validator-lint.jsonl'))).toBe(false);
+    });
+
+    const rows = await engine.executeRaw<{ source_id: string }>(
+      `SELECT source_id
+       FROM ingest_log
+       WHERE source_type = 'writer_lint' AND source_ref = 'people/remote-lint'`,
+    );
+    expect(rows).toEqual([{ source_id: 'remote-lint' }]);
+  });
+
+  test('default/local control retains the host file and default DB audit', async () => {
+    await engine.putPage('people/local-lint', {
+      type: 'person',
+      title: 'Local',
+      compiled_truth: 'Local raised $5M in Series A from Sequoia without citation.',
+      frontmatter: {},
+    });
+
+    await withTempGbrainHome(async (root) => {
+      const r = await runPostWriteLint(engine, 'people/local-lint', { force: true });
+      expect(r.ran).toBe(true);
+      expect(r.findings.length).toBeGreaterThan(0);
+      expect(existsSync(join(root, '.gbrain', 'validator-lint.jsonl'))).toBe(true);
+    });
+
+    const rows = await engine.executeRaw<{ source_id: string }>(
+      `SELECT source_id
+       FROM ingest_log
+       WHERE source_type = 'writer_lint' AND source_ref = 'people/local-lint'`,
+    );
+    expect(rows).toEqual([{ source_id: 'default' }]);
   });
 });

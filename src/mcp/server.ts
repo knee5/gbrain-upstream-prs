@@ -5,7 +5,12 @@ import type { BrainEngine } from '../core/engine.ts';
 import { operations } from '../core/operations.ts';
 import { VERSION } from '../version.ts';
 import { buildToolDefs } from './tool-defs.ts';
-import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
+import {
+  dispatchToolCall,
+  validateParams,
+  buildOperationContext,
+  type DispatchOpts,
+} from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
 import {
@@ -14,6 +19,28 @@ import {
   cleanupStaleSocket,
 } from '../core/context/resolve-ipc.ts';
 import { resolveEntitiesToPointers, logDeliveredReflexPointers } from '../core/context/retrieval-reflex.ts';
+
+/**
+ * Build the operation-context inputs for the auth-less stdio MCP transport.
+ *
+ * Keep this as a named, testable boundary instead of an inline object literal:
+ * dropping `transport: 'stdio'` makes `whoami` fail with unknown_transport even
+ * though every other stdio tool still works. The marker is identity metadata
+ * only; `remote: true` remains the trust boundary.
+ */
+export function buildStdioDispatchOpts(
+  sourceId: string,
+  localFederatedSourceIds?: string[],
+): DispatchOpts {
+  return {
+    remote: true,
+    transport: 'stdio',
+    takesHoldersAllowList: ['world'],
+    sourceId,
+    ...(localFederatedSourceIds ? { localFederatedSourceIds } : {}),
+    metaHook: getBrainHotMemoryMeta,
+  };
+}
 
 export async function startMcpServer(engine: BrainEngine) {
   const server = new Server(
@@ -54,23 +81,18 @@ export async function startMcpServer(engine: BrainEngine) {
     // see private hunches via takes_list / takes_search / query. Operators
     // who want stdio to see everything should call ops directly via
     // `gbrain call <op>` (sets remote=false in src/cli.ts).
-    return dispatchToolCall(engine, name, params, {
-      remote: true,
-      // #1061: mark the transport so whoami can report {transport: 'stdio'}
-      // instead of throwing unknown_transport. Trust posture unchanged —
-      // stdio stays remote/untrusted.
-      transport: 'stdio',
-      takesHoldersAllowList: ['world'],
-      // v0.31: source defaults to 'default' for stdio (no per-token scope).
-      // Operators who want a different source on stdio MCP should set
-      // GBRAIN_SOURCE in the env or use --source via `gbrain call`.
-      sourceId: process.env.GBRAIN_SOURCE || 'default',
-      ...(localFederated ? { localFederatedSourceIds: localFederated } : {}),
-      // v0.31 (eD3): _meta.brain_hot_memory injection so Claude Desktop /
-      // Code see the brain's relevant hot memory automatically alongside
-      // every tool-call response. Best-effort; absorbs errors.
-      metaHook: getBrainHotMemoryMeta,
-    });
+    // v0.31: source defaults to 'default' for stdio (no per-token scope).
+    // Operators who want a different source on stdio MCP should set
+    // GBRAIN_SOURCE in the env or use --source via `gbrain call`.
+    return dispatchToolCall(
+      engine,
+      name,
+      params,
+      buildStdioDispatchOpts(
+        process.env.GBRAIN_SOURCE || 'default',
+        localFederated,
+      ),
+    );
   });
 
   const transport = new StdioServerTransport();

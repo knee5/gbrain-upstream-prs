@@ -2,9 +2,9 @@
  * put_page write-through tests (v0.38).
  *
  * Verifies that put_page writes the markdown file to disk alongside the
- * DB row when sync.repo_path is configured. Trust gating: subagent
- * sandbox writes stay DB-only; dry-run stays DB-only; missing-repo
- * stays DB-only.
+ * DB row when sync.repo_path is configured. Trust gating: all remote
+ * writes stay DB-only with skipped=remote; trusted local CLI writes retain
+ * the atomic mirror; dry-run and missing-repo paths stay DB-only.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
+import { withEnv } from '../helpers/with-env.ts';
 import { operations } from '../../src/core/operations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
 import { resetGateway } from '../../src/core/ai/gateway.ts';
@@ -100,34 +101,112 @@ describe('put_page write-through — happy path', () => {
     expect(onDisk).toContain('WT body');
   });
 
-  test('stamps provenance frontmatter (ingested_via=put_page for local CLI)', async () => {
+  test('mirrors the DB row provenance instead of replacing trusted-local values', async () => {
     const ctx = makeCtx({ remote: false });
     const result = (await putPage.handler(ctx, {
       slug: 'inbox/provenance',
       content: '---\ntitle: P\n---\n\nbody',
+      source_kind: 'capture-cli',
+      source_uri: 'file:///tmp/example-note.md',
+      ingested_via: 'capture-cli',
     })) as { write_through?: { written: boolean; path?: string } };
     expect(result.write_through?.written).toBe(true);
     const onDisk = fs.readFileSync(result.write_through!.path!, 'utf8');
-    expect(onDisk).toMatch(/ingested_via:\s*put_page/);
+    expect(onDisk).toMatch(/source_kind:\s*capture-cli/);
+    expect(onDisk).toMatch(/ingested_via:\s*capture-cli/);
+    expect(onDisk).toContain('file:///tmp/example-note.md');
     expect(onDisk).toMatch(/ingested_at:/);
+    const page = await engine.getPage('inbox/provenance');
+    expect(page?.source_kind).toBe('capture-cli');
+    expect(page?.ingested_via).toBe('capture-cli');
+    expect(page?.source_uri).toBe('file:///tmp/example-note.md');
   });
 
-  test('MCP/remote callers get ingested_via=mcp:put_page', async () => {
-    const ctx = makeCtx({ remote: true });
+  test('OAuth/remote callers stay DB-only: no fact side writes or filesystem write-through', async () => {
+    const ctx = makeCtx({
+      remote: true,
+      auth: {
+        token: 'test-token',
+        clientId: 'remote-write-client',
+        scopes: ['read', 'write'],
+        sourceId: 'default',
+        writeSlugPrefixes: ['inbox/mcp-prov/*'],
+      },
+    });
+    const factsBefore = await engine.executeRaw<{ n: number }>('SELECT COUNT(*) AS n FROM facts');
     const result = (await putPage.handler(ctx, {
-      slug: 'inbox/mcp-prov',
-      content: '---\ntitle: Q\n---\n\nbody',
-    })) as { write_through?: { written: boolean; path?: string } };
-    expect(result.write_through?.written).toBe(true);
-    const onDisk = fs.readFileSync(result.write_through!.path!, 'utf8');
-    // YAML quotes strings containing `:` so the literal frontmatter line
-    // is `ingested_via: 'mcp:put_page'`. Match the value substring.
-    expect(onDisk).toMatch(/ingested_via:\s*['"]?mcp:put_page['"]?/);
+      slug: 'inbox/mcp-prov/page',
+      content: `---\ntitle: Q\n---\n\n${'This substantive remote page names people/arbitrary-target and contains facts. '.repeat(12)}`,
+    })) as {
+      facts_backstop?: { queued?: boolean; skipped?: string };
+      write_through?: { written: boolean; path?: string; skipped?: string };
+    };
+    expect(result.facts_backstop).toEqual({ skipped: 'remote' });
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(brainDir, 'inbox/mcp-prov/page.md'))).toBe(false);
+
+    const factsAfter = await engine.executeRaw<{ n: number }>('SELECT COUNT(*) AS n FROM facts');
+    expect(Number(factsAfter[0]?.n ?? 0)).toBe(Number(factsBefore[0]?.n ?? 0));
+
+    const page = await engine.getPage('inbox/mcp-prov/page');
+    expect(page).not.toBeNull();
+    expect(page?.source_kind).toBe('mcp:put_page');
+    expect(page?.ingested_via).toBe('mcp:put_page');
+  });
+
+  test('OAuth lint stays source-scoped and DB-only when lint_on_put_page is enabled', async () => {
+    await engine.executeRaw(
+      "INSERT INTO sources (id, name) VALUES ('remote-lint-source', 'remote-lint-source')",
+    );
+    await engine.setConfig('writer.lint_on_put_page', 'true');
+    // A same-slug default page is grandfathered. If post-write lint drops the
+    // OAuth source scope, it will inspect this row and report "skipped"
+    // instead of validating the newly written non-default page.
+    await engine.putPage('remote-lint/page', {
+      type: 'person',
+      title: 'Default',
+      compiled_truth: 'Default source control row.',
+      frontmatter: { validate: false },
+    });
+
+    const result = await withEnv({ GBRAIN_HOME: tmpRoot }, async () => (
+      await putPage.handler(makeCtx({
+        remote: true,
+        sourceId: 'remote-lint-source',
+        auth: {
+          token: 'test-token',
+          clientId: 'remote-lint-client',
+          scopes: ['read', 'write'],
+          sourceId: 'remote-lint-source',
+          writeSlugPrefixes: ['remote-lint/*'],
+        },
+      }), {
+        slug: 'remote-lint/page',
+        content: '---\ntitle: Remote lint\n---\n\nRemote raised $5M in Series A from Sequoia without citation.',
+      })
+    )) as {
+      writer_lint?: { error_count?: number; warning_count?: number; skipped?: string };
+      write_through?: { written: boolean; skipped?: string };
+    };
+
+    expect(result.writer_lint?.skipped).toBeUndefined();
+    expect((result.writer_lint?.error_count ?? 0) + (result.writer_lint?.warning_count ?? 0))
+      .toBeGreaterThan(0);
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(fs.existsSync(path.join(tmpRoot, '.gbrain', 'validator-lint.jsonl'))).toBe(false);
+
+    const audits = await engine.executeRaw<{ source_id: string }>(
+      `SELECT source_id
+       FROM ingest_log
+       WHERE source_type = 'writer_lint' AND source_ref = 'remote-lint/page'`,
+    );
+    expect(audits).toEqual([{ source_id: 'remote-lint-source' }]);
+    expect(await engine.getPage('remote-lint/page', { sourceId: 'remote-lint-source' })).not.toBeNull();
   });
 });
 
 describe('put_page write-through — trust gating', () => {
-  test('subagent sandbox write (viaSubagent without allowedSlugPrefixes) stays DB-only', async () => {
+  test('remote subagent sandbox write stays DB-only with the remote reason', async () => {
     const ctx = makeCtx({
       remote: true,
       viaSubagent: true,
@@ -139,11 +218,29 @@ describe('put_page write-through — trust gating', () => {
       content: '---\ntitle: S\n---\n\nbody',
     })) as { write_through?: { written: boolean; skipped?: string } };
     expect(result.write_through?.written).toBe(false);
-    expect(result.write_through?.skipped).toBe('subagent_sandbox');
+    expect(result.write_through?.skipped).toBe('remote');
     expect(fs.existsSync(path.join(brainDir, 'wiki/agents/42/scratch.md'))).toBe(false);
+    expect(await engine.getPage('wiki/agents/42/scratch')).not.toBeNull();
   });
 
-  test('trusted-workspace subagent (viaSubagent + allowedSlugPrefixes) writes through', async () => {
+  test('local slug-bounded subagent remains sandboxed without protected-cycle provenance', async () => {
+    const ctx = makeCtx({
+      remote: false,
+      viaSubagent: true,
+      subagentId: 6,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+    });
+    const result = (await putPage.handler(ctx, {
+      slug: 'wiki/personal/reflections/local-sandbox',
+      content: '---\ntitle: Local sandbox\n---\n\nreflection',
+    })) as { write_through?: { written: boolean; skipped?: string } };
+
+    expect(result.write_through).toEqual({ written: false, skipped: 'subagent_sandbox' });
+    expect(fs.existsSync(path.join(brainDir, 'wiki/personal/reflections/local-sandbox.md'))).toBe(false);
+    expect(await engine.getPage('wiki/personal/reflections/local-sandbox')).not.toBeNull();
+  });
+
+  test('slug-bounded remote subagent remains untrusted for secondary writes', async () => {
     const ctx = makeCtx({
       remote: true,
       viaSubagent: true,
@@ -153,9 +250,56 @@ describe('put_page write-through — trust gating', () => {
     const result = (await putPage.handler(ctx, {
       slug: 'wiki/personal/reflections/note',
       content: '---\ntitle: R\n---\n\nreflection',
-    })) as { write_through?: { written: boolean; path?: string } };
-    expect(result.write_through?.written).toBe(true);
-    expect(fs.existsSync(result.write_through!.path!)).toBe(true);
+    })) as {
+      auto_links?: { skipped?: string };
+      auto_timeline?: { skipped?: string };
+      facts_backstop?: { skipped?: string };
+      chronicle_backstop?: { skipped?: string };
+      write_through?: { written: boolean; path?: string; skipped?: string };
+    };
+    expect(result.write_through).toEqual({ written: false, skipped: 'remote' });
+    expect(result.auto_links).toEqual({ skipped: 'remote' });
+    expect(result.auto_timeline).toEqual({ skipped: 'remote' });
+    expect(result.facts_backstop).toEqual({ skipped: 'remote' });
+    expect(result.chronicle_backstop).toEqual({ skipped: 'remote' });
+    expect(fs.existsSync(path.join(brainDir, 'wiki/personal/reflections/note.md'))).toBe(false);
+    expect(await engine.getPage('wiki/personal/reflections/note')).not.toBeNull();
+  });
+
+  test('protected-cycle provenance, not slug scope, enables trusted secondary processing', async () => {
+    const ctx = makeCtx({
+      remote: true,
+      viaSubagent: true,
+      subagentId: 8,
+      allowedSlugPrefixes: ['wiki/personal/reflections/*'],
+      trustedWorkspace: true,
+    });
+    const result = (await putPage.handler(ctx, {
+      slug: 'wiki/personal/reflections/protected-cycle-note',
+      content: '---\ntitle: Protected cycle\n---\n\nreflection',
+    })) as {
+      auto_links?: { skipped?: string };
+      auto_timeline?: { skipped?: string };
+      facts_backstop?: { skipped?: string };
+      chronicle_backstop?: { skipped?: string };
+    };
+
+    expect(result.auto_links?.skipped).not.toBe('remote');
+    expect(result.auto_timeline?.skipped).not.toBe('remote');
+    expect(result.facts_backstop?.skipped).not.toBe('remote');
+    expect(result.chronicle_backstop?.skipped).not.toBe('remote');
+  });
+
+  test('missing transport identity fails closed before DB or filesystem writes', async () => {
+    const ctx = makeCtx({ remote: undefined as any });
+    await expect(putPage.handler(ctx, {
+      slug: 'inbox/fail-closed-remote',
+      content: '---\ntitle: U\n---\n\nbody',
+    })).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+    expect(fs.existsSync(path.join(brainDir, 'inbox/fail-closed-remote.md'))).toBe(false);
+    expect(await engine.getPage('inbox/fail-closed-remote')).toBeNull();
   });
 
   test('dry-run stays DB-only (early-return before importFromContent)', async () => {

@@ -11,7 +11,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { parseRegisterClientArgs } from '../src/commands/auth.ts';
+import {
+  assertRegisterClientWriteNamespace,
+  parseRegisterClientArgs,
+} from '../src/commands/auth.ts';
 
 describe('parseRegisterClientArgs', () => {
   test('empty args → all defaults', () => {
@@ -116,11 +119,13 @@ describe('parseRegisterClientArgs', () => {
         '--scopes', 'read write',
         '--redirect-uri', 'https://claude.ai/api/mcp/auth_callback',
         '--redirect-uri', 'https://claude.com/api/mcp/auth_callback',
+        '--bound-slug-prefixes', 'inbox/claude-ai/*',
       ]);
       expect(out.grantTypes).toEqual(['authorization_code', 'refresh_token']);
       expect(out.scopes).toBe('read write');
       expect(out.redirectUris).toHaveLength(2);
       expect(out.tokenEndpointAuthMethod).toBeUndefined();
+      expect(out.boundSlugPrefixes).toEqual(['inbox/claude-ai/*']);
     });
 
     test('ChatGPT pre-registration (PKCE public client)', () => {
@@ -129,10 +134,22 @@ describe('parseRegisterClientArgs', () => {
         '--scopes', 'read write',
         '--redirect-uri', 'https://chatgpt.com/connector/oauth/HASH',
         '--token-endpoint-auth-method', 'none',
+        '--bound-slug-prefixes', 'inbox/chatgpt/*',
       ]);
       expect(out.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+      expect(out.scopes.split(' ').sort()).toEqual(['read', 'write']);
+      expect(out.scopes).not.toContain('admin');
       expect(out.redirectUris).toEqual(['https://chatgpt.com/connector/oauth/HASH']);
       expect(out.tokenEndpointAuthMethod).toBe('none');
+      expect(out.boundSlugPrefixes).toEqual(['inbox/chatgpt/*']);
+    });
+
+    test('generic/public registration remains read-only unless the operator explicitly grants write', () => {
+      const out = parseRegisterClientArgs([
+        '--redirect-uri', 'https://client.example/callback',
+      ]);
+      expect(out.scopes).toBe('read');
+      expect(out.scopes).not.toContain('write');
     });
 
     test('--redirect-uri without --grant-types → auto-infers authorization_code,refresh_token', () => {
@@ -160,16 +177,33 @@ describe('parseRegisterClientArgs', () => {
         '--bound-tools', 'search, get_page,put_page',
         '--bound-source', 'dept-x',
         '--bound-brain', 'company-brain',
-        '--bound-slug-prefixes', 'wiki/agents/alice/,notes/',
+        '--bound-slug-prefixes', 'wiki/agents/alice/*,notes/*',
         '--bound-max-concurrent', '3',
         '--budget-usd-per-day', '12.50',
       ]);
       expect(out.boundTools).toEqual(['search', 'get_page', 'put_page']);
       expect(out.boundSourceId).toBe('dept-x');
       expect(out.boundBrainId).toBe('company-brain');
-      expect(out.boundSlugPrefixes).toEqual(['wiki/agents/alice/', 'notes/']);
+      expect(out.boundSlugPrefixes).toEqual(['notes/*', 'wiki/agents/alice/*']);
       expect(out.boundMaxConcurrent).toBe(3);
       expect(out.budgetUsdPerDay).toBe('12.50');
+    });
+  });
+
+  describe('write slug prefix validation', () => {
+    test('normalizes, deduplicates, and sorts namespace globs', () => {
+      expect(parseRegisterClientArgs([
+        '--bound-slug-prefixes', 'Inbox/Client/*,inbox/client/*',
+      ]).boundSlugPrefixes).toEqual(['inbox/client/*']);
+    });
+
+    test('rejects unsupported prefix shapes before database access', () => {
+      expect(() => parseRegisterClientArgs([
+        '--bound-slug-prefixes', 'inbox/client/',
+      ])).toThrow(/Invalid write slug prefix/);
+      expect(() => parseRegisterClientArgs([
+        '--bound-slug-prefixes', 'inbox/*/escape',
+      ])).toThrow(/Wildcards are supported only as a trailing/);
     });
   });
 
@@ -195,5 +229,26 @@ describe('parseRegisterClientArgs', () => {
       expect(() => parseRegisterClientArgs(['--budget-usd-per-day', '1.234'])).toThrow(/non-negative decimal/);
       expect(() => parseRegisterClientArgs(['--budget-usd-per-day', 'abc'])).toThrow(/non-negative decimal/);
     });
+  });
+});
+
+describe('assertRegisterClientWriteNamespace', () => {
+  test('rejects a routine write client without a namespace', () => {
+    expect(() => assertRegisterClientWriteNamespace('read write', undefined))
+      .toThrow(/require --bound-slug-prefixes/);
+    expect(() => assertRegisterClientWriteNamespace('read write', []))
+      .toThrow(/require --bound-slug-prefixes/);
+  });
+
+  test('accepts a routine writer with a namespace', () => {
+    expect(() => assertRegisterClientWriteNamespace(
+      'read write',
+      ['inbox/client-name/*'],
+    )).not.toThrow();
+  });
+
+  test('read-only and admin clients do not need a routine-write namespace', () => {
+    expect(() => assertRegisterClientWriteNamespace('read', undefined)).not.toThrow();
+    expect(() => assertRegisterClientWriteNamespace('read write admin', undefined)).not.toThrow();
   });
 });

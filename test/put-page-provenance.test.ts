@@ -161,7 +161,15 @@ describe('put_page provenance — trusted local caller (ctx.remote === false)', 
 
 describe('put_page provenance — CV6 spoofing guard (ctx.remote !== false)', () => {
   test('remote caller cannot claim source_kind: capture-cli', async () => {
-    const ctx = makeCtx({ remote: true });
+    const ctx = makeCtx({
+      remote: true,
+      auth: {
+        token: 'test-token',
+        clientId: 'provenance-write-client',
+        scopes: ['read', 'write'],
+        writeSlugPrefixes: ['wiki/*'],
+      },
+    });
     await putPageOp.handler(ctx, {
       slug: 'wiki/p3a-remote-spoof-attempt',
       content: '---\ntype: note\ntitle: Spoof\n---\n\nbody',
@@ -177,7 +185,7 @@ describe('put_page provenance — CV6 spoofing guard (ctx.remote !== false)', ()
     expect(prov.ingested_at).toBeInstanceOf(Date);
   });
 
-  test('ctx.remote === undefined (no explicit trust) is treated as remote', async () => {
+  test('ctx.remote === undefined without an authenticated identity fails closed', async () => {
     // v0.26.9 F7b discipline: anything that isn't strictly `false` is remote.
     const ctx: OperationContext = {
       engine,
@@ -188,13 +196,12 @@ describe('put_page provenance — CV6 spoofing guard (ctx.remote !== false)', ()
       remote: undefined as unknown as boolean,
       sourceId: 'default',
     };
-    await putPageOp.handler(ctx, {
+    await expect(putPageOp.handler(ctx, {
       slug: 'wiki/p3a-undefined-trust',
       content: '---\ntype: note\ntitle: Undefined\n---\n\nbody',
       source_kind: 'capture-cli',
-    });
-    const prov = await readProvenance('wiki/p3a-undefined-trust');
-    expect(prov.source_kind).toBe('mcp:put_page');
+    })).rejects.toMatchObject({ code: 'permission_denied' });
+    expect(await engine.getPage('wiki/p3a-undefined-trust')).toBeNull();
   });
 });
 
@@ -263,7 +270,15 @@ describe('put_page provenance — CV12 COALESCE-preserve UPDATE', () => {
     });
 
     // Second: remote MCP edit (server stamps mcp:put_page)
-    const remoteCtx = makeCtx({ remote: true });
+    const remoteCtx = makeCtx({
+      remote: true,
+      auth: {
+        token: 'test-token',
+        clientId: 'provenance-write-client',
+        scopes: ['read', 'write'],
+        writeSlugPrefixes: ['wiki/*'],
+      },
+    });
     await putPageOp.handler(remoteCtx, {
       slug: 'wiki/p3a-local-then-remote',
       content: '---\ntype: note\ntitle: V2\n---\n\nremote edit',

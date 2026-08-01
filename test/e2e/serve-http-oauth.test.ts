@@ -54,7 +54,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     // get the subset they ask for — adding admin to the client's allowed
     // ceiling does not auto-grant it to every minted token.
     const regOutput = execSync(
-      'bun run src/cli.ts auth register-client e2e-oauth-test --grant-types client_credentials --scopes "read write admin"',
+      'bun run src/cli.ts auth register-client e2e-oauth-test --grant-types client_credentials --scopes "read write admin" --bound-slug-prefixes "inbox/e2e-oauth/*"',
       { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env } }
     );
     const idMatch = regOutput.match(/Client ID:\s+(gbrain_cl_\S+)/);
@@ -139,6 +139,56 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }),
     });
+  }
+
+  function parseMcpEnvelope(raw: string): any {
+    const jsonText = raw.trim().startsWith('{')
+      ? raw.trim()
+      : raw
+          .split(/\r?\n/)
+          .find(line => line.startsWith('data:'))
+          ?.slice('data:'.length)
+          .trim();
+    if (!jsonText) throw new Error(`Unrecognized MCP response envelope: ${raw.slice(0, 120)}`);
+    return JSON.parse(jsonText);
+  }
+
+  function parseMcpToolPayload(raw: string): any {
+    const envelope = parseMcpEnvelope(raw);
+    const text = envelope?.result?.content?.[0]?.text;
+    if (typeof text !== 'string') {
+      throw new Error(`MCP response has no text tool payload: ${raw.slice(0, 120)}`);
+    }
+    return JSON.parse(text);
+  }
+
+  async function listTools(token: string): Promise<Array<{
+    name: string;
+    annotations?: {
+      readOnlyHint?: boolean;
+      destructiveHint?: boolean;
+      idempotentHint?: boolean;
+      openWorldHint?: boolean;
+    };
+  }>> {
+    const res = await mcpCall(token, 'tools/list');
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    // Streamable HTTP may return either application/json or a one-event SSE
+    // envelope depending on SDK content negotiation. Normalize both shapes.
+    const payload = parseMcpEnvelope(raw) as {
+      result?: { tools?: Array<{
+        name: string;
+        annotations?: {
+          readOnlyHint?: boolean;
+          destructiveHint?: boolean;
+          idempotentHint?: boolean;
+          openWorldHint?: boolean;
+        };
+      }> };
+    };
+    expect(Array.isArray(payload.result?.tools)).toBe(true);
+    return payload.result!.tools!;
   }
 
   // =========================================================================
@@ -312,6 +362,147 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     // Should get a result, not an auth error
     expect(body).not.toContain('invalid_token');
     expect(body).not.toContain('insufficient_scope');
+  }, 15_000);
+
+  test('write-scoped OAuth token is fenced to its registered slug namespace', async () => {
+    const { access_token } = await mintToken('read write');
+    const postgres = (await import('postgres')).default;
+    const sql = postgres(process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL || '', { prepare: false });
+
+    try {
+      const identity = await mcpCall(access_token, 'tools/call', {
+        name: 'whoami',
+        arguments: {},
+      });
+      const identityBody = await identity.text();
+      expect(identityBody).toContain('write_slug_prefixes');
+      expect(identityBody).toContain('inbox/e2e-oauth/*');
+
+      const factsBefore = await sql`SELECT COUNT(*)::int AS n FROM facts`;
+      const inside = await mcpCall(access_token, 'tools/call', {
+        name: 'put_page',
+        arguments: {
+          slug: 'inbox/e2e-oauth/allowed',
+          content:
+            '---\ntitle: OAuth fence allowed path\n---\n\n'
+            + 'This substantive remote page names people/arbitrary-target and contains facts. '.repeat(12),
+        },
+      });
+      const insideBody = await inside.text();
+      expect(inside.status).not.toBe(401);
+      expect(inside.status).not.toBe(403);
+      expect(insideBody).not.toContain('permission_denied');
+      const insidePayload = parseMcpToolPayload(insideBody);
+      expect(insidePayload.slug).toBe('inbox/e2e-oauth/allowed');
+      expect(insidePayload.facts_backstop).toEqual({ skipped: 'remote' });
+      expect(insidePayload.write_through).toEqual({ written: false, skipped: 'remote' });
+
+      // The backstop is skipped synchronously, so there is no queued model
+      // output that can later insert an arbitrary entity fact.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const factsAfter = await sql`SELECT COUNT(*)::int AS n FROM facts`;
+      expect(factsAfter[0].n).toBe(factsBefore[0].n);
+
+      const outside = await mcpCall(access_token, 'tools/call', {
+        name: 'put_page',
+        arguments: {
+          slug: 'people/e2e-oauth-outside',
+          content: '---\ntitle: OAuth fence test\n---\n\nThis write must be rejected.',
+        },
+      });
+      const outsideBody = await outside.text();
+      expect(outsideBody).toContain('permission_denied');
+      expect(outsideBody).toContain('outside this OAuth client');
+    } finally {
+      await sql.end();
+    }
+  }, 15_000);
+
+  test('tools/list advertises only operations allowed by the token scope', async () => {
+    const readTools = await listTools((await mintToken('read')).access_token);
+    const writeTools = await listTools((await mintToken('write')).access_token);
+    const adminTools = await listTools((await mintToken('admin')).access_token);
+
+    const readNames = new Set(readTools.map(tool => tool.name));
+    expect(readNames.has('search')).toBe(true);
+    expect(readNames.has('query')).toBe(true);
+    expect(readNames.has('put_page')).toBe(false);
+    expect(readNames.has('delete_page')).toBe(false);
+    expect(readNames.has('get_health')).toBe(false);
+    expect(readNames.has('submit_job')).toBe(false);
+
+    const writeNames = new Set(writeTools.map(tool => tool.name));
+    expect(writeNames.has('search')).toBe(true);
+    expect(writeNames.has('put_page')).toBe(true);
+    for (const name of [
+      'delete_page',
+      'restore_page',
+      'remove_tag',
+      'remove_link',
+      'revert_version',
+      'forget_fact',
+      'purge_deleted_pages',
+      'extract_facts',
+    ]) {
+      expect(writeNames.has(name), `write catalog must exclude privileged tool "${name}"`).toBe(false);
+    }
+    expect(writeNames.has('get_health')).toBe(false);
+    expect(writeNames.has('submit_job')).toBe(false);
+
+    const adminNames = new Set(adminTools.map(tool => tool.name));
+    expect(adminNames.has('search')).toBe(true);
+    expect(adminNames.has('put_page')).toBe(true);
+    for (const name of [
+      'delete_page',
+      'restore_page',
+      'remove_tag',
+      'remove_link',
+      'revert_version',
+      'extract_facts',
+    ]) {
+      expect(adminNames.has(name), `admin catalog must include remote admin tool "${name}"`).toBe(true);
+    }
+    expect(adminNames.has('get_health')).toBe(true);
+    expect(adminNames.has('submit_job')).toBe(true);
+
+    // localOnly tools never appear even when their declared scope is satisfied.
+    expect(adminNames.has('sync_brain')).toBe(false);
+    expect(adminNames.has('file_upload')).toBe(false);
+    expect(adminNames.has('forget_fact')).toBe(false);
+    expect(adminNames.has('purge_deleted_pages')).toBe(false);
+  }, 15_000);
+
+  test('HTTP callers cannot invoke fact mutations outside their transport policy', async () => {
+    const writeToken = (await mintToken('write')).access_token;
+    const extract = await mcpCall(writeToken, 'tools/call', {
+      name: 'extract_facts',
+      arguments: { turn_text: 'This must not reach the model-backed extractor.' },
+    });
+    const extractBody = await extract.text();
+    expect(extractBody).toContain('insufficient_scope');
+    expect(extractBody).toContain("requires 'admin'");
+
+    const adminToken = (await mintToken('admin')).access_token;
+    const forget = await mcpCall(adminToken, 'tools/call', {
+      name: 'forget_fact',
+      arguments: { id: 1 },
+    });
+    const forgetBody = await forget.text();
+    expect(forgetBody).toContain('unknown_operation');
+    expect(forgetBody).toContain('forget_fact');
+  }, 15_000);
+
+  test('read-token catalog carries complete MCP annotations', async () => {
+    const tools = await listTools((await mintToken('read')).access_token);
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.annotations, `missing annotations for ${tool.name}`).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: tool.name === 'search_by_image',
+      });
+    }
   }, 15_000);
 
   // =========================================================================
@@ -546,7 +737,7 @@ describeE2E('serve-http OAuth 2.1 E2E (v0.26.1 + v0.26.2 + v0.26.3)', () => {
     try {
       await sql`
         INSERT INTO oauth_tokens (token_hash, token_type, client_id, scopes, expires_at)
-        VALUES (${tokenHash}, ${'access'}, ${publicClientId!}, ${sql.array(['read'])}, ${Math.floor(Date.now() / 1000) + 3600})
+        VALUES (${tokenHash}, ${'access'}, ${publicClientId!}, ${['read']}::text[], ${Math.floor(Date.now() / 1000) + 3600})
       `;
     } finally {
       await sql.end();

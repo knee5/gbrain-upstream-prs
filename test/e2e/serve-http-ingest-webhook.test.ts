@@ -19,10 +19,12 @@
  *   3. Content-type allowlist: image/png → 415 with paste-ready
  *      processor-skillpack hint
  *   4. Happy path: text/markdown → 200/202 with job_id in response
- *   5. Header overrides: X-Gbrain-Slug is forwarded; X-Gbrain-Source-Id
+ *   5. Namespace fence: omitted X-Gbrain-Slug derives beneath the first
+ *      wildcard binding; explicit slugs outside the binding are rejected
+ *   6. Header overrides: X-Gbrain-Slug is forwarded; X-Gbrain-Source-Id
  *      tags the event
- *   6. Idempotency: same content + same client → job_id returned twice
- *      should match (queue dedup on (client_id, content_hash))
+ *   7. Idempotency: same content + same client + same authenticated source →
+ *      job_id returned twice should match
  *
  * Mirrors the spawn + mint pattern from test/e2e/serve-http-oauth.test.ts
  * exactly so future maintainers see one pattern, not two.
@@ -54,7 +56,7 @@ describeE2E('serve-http POST /ingest webhook (v0.38)', () => {
     // Register a confidential client with both read and write scopes.
     // The write scope is what POST /ingest gates on.
     const regOutput = execSync(
-      'bun run src/cli.ts auth register-client e2e-webhook-test --grant-types client_credentials --scopes "read write"',
+      'bun run src/cli.ts auth register-client e2e-webhook-test --grant-types client_credentials --scopes "read write" --bound-slug-prefixes "inbox/*,webhook/*"',
       { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env } },
     );
     const idMatch = regOutput.match(/Client ID:\s+(gbrain_cl_\S+)/);
@@ -189,8 +191,9 @@ describeE2E('serve-http POST /ingest webhook (v0.38)', () => {
       `# webhook happy path\n\nIngested at ${new Date().toISOString()}`,
     );
     expect([200, 202]).toContain(res.status);
-    const body = (await res.json()) as { job_id?: number | string; ok?: boolean };
+    const body = (await res.json()) as { job_id?: number | string; ok?: boolean; slug?: string };
     expect(body.job_id).toBeDefined();
+    expect(body.slug).toMatch(/^inbox\/\d{4}-\d{2}-\d{2}-[a-f0-9]{6}$/);
   });
 
   // =========================================================================
@@ -332,6 +335,20 @@ describeE2E('serve-http POST /ingest webhook (v0.38)', () => {
     // test/ingestion/ingest-capture.test.ts).
   });
 
+  test('X-Gbrain-Slug outside the OAuth write namespace → 403', async () => {
+    const token = await mintToken('read write');
+    const res = await postIngest(
+      token,
+      'text/markdown',
+      '# out-of-namespace slug',
+      { 'X-Gbrain-Slug': `private/escape-${Date.now()}` },
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: string; message?: string };
+    expect(body.error).toBe('permission_denied');
+    expect(body.message).toContain('outside this OAuth client');
+  });
+
   test('X-Gbrain-Source-Id header is accepted', async () => {
     const token = await mintToken('read write');
     const res = await postIngest(
@@ -358,7 +375,7 @@ describeE2E('serve-http POST /ingest webhook (v0.38)', () => {
   // Idempotency
   // =========================================================================
 
-  test('same content from same client → identical job_id (queue dedup on content_hash)', async () => {
+  test('same content from same client + authenticated source → identical job_id', async () => {
     const token = await mintToken('read write');
     const content = `# idempotency test ${Math.random()}`;
     const first = await postIngest(token, 'text/markdown', content);
@@ -369,8 +386,8 @@ describeE2E('serve-http POST /ingest webhook (v0.38)', () => {
     expect([200, 202]).toContain(second.status);
     const secondBody = (await second.json()) as { job_id?: number | string };
 
-    // Queue idempotency_key: `ingest:webhook:${clientId}:${contentHash}` —
-    // same input, same key, MinionQueue.add returns the existing job.
+    // Queue idempotency_key includes clientId + authenticated target source +
+    // contentHash. Same input and source therefore return the existing job.
     expect(secondBody.job_id).toBe(firstBody.job_id!);
   });
 

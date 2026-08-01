@@ -197,6 +197,18 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
       const result = await callSubmitAgent(ctx, { prompt: 'go' });
       expect(result.dry_run).toBe(true);
     });
+
+    it('rejects an explicitly empty allowed_tools list instead of widening it', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['search'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['wiki/'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, { prompt: 'go', allowed_tools: [] }),
+      ).rejects.toThrow(/allowed_tools must be a non-empty array when supplied/);
+    });
   });
 
   describe('allowed_slug_prefixes enforcement', () => {
@@ -215,6 +227,100 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
       expect(r1.dry_run).toBe(true);
     });
 
+    it('allows exact descendants and narrower wildcard namespaces under a wildcard binding', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor/*'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor/page-1'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      const narrower = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor/session-1/*'],
+      });
+      expect(narrower.dry_run).toBe(true);
+    });
+
+    it('honors persisted legacy trailing-slash bindings for descendants', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['wiki/'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['wiki/team/page-1'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      const narrower = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['wiki/team/*'],
+      });
+      expect(narrower.dry_run).toBe(true);
+    });
+
+    it('treats an exact binding as exact, not as a parent namespace', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor', dryRun: true });
+
+      const exact = await callSubmitAgent(ctx, {
+        prompt: 'go',
+        allowed_slug_prefixes: ['inbox/cursor'],
+      });
+      expect(exact.dry_run).toBe(true);
+
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['inbox/cursor/child'],
+        }),
+      ).rejects.toThrow(/slug_prefix "inbox\/cursor\/child" is not under any.*bound_slug_prefixes/);
+    });
+
+    it('rejects a sibling namespace that merely shares an exact string prefix', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['inbox/cursor-evil/*'],
+        }),
+      ).rejects.toThrow(/slug_prefix "inbox\/cursor-evil\/\*" is not under any.*bound_slug_prefixes/);
+    });
+
+    it('fails closed when a write-capable agent has no bound slug prefixes', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: null,
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: ['private/*'],
+        }),
+      ).rejects.toThrow(/slug_prefix "private\/\*" is not under any.*bound_slug_prefixes/);
+    });
+
     it('refuses when a requested prefix has no bound parent', async () => {
       await seedClient('cursor', {
         bound_tools: ['put_page'],
@@ -228,6 +334,58 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
           allowed_slug_prefixes: ['private/'],
         }),
       ).rejects.toThrow(/slug_prefix "private\/" is not under any.*bound_slug_prefixes/);
+    });
+
+    it('rejects an explicitly empty delegated slug list instead of selecting the legacy namespace', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: ['inbox/cursor/*'],
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, {
+          prompt: 'go',
+          allowed_slug_prefixes: [],
+        }),
+      ).rejects.toThrow(/allowed_slug_prefixes must be a non-empty array when supplied/);
+    });
+
+    it('fails closed when omitted bindings would give a remote writer no delegated namespace', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['put_page'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: null,
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      await expect(
+        callSubmitAgent(ctx, { prompt: 'go' }),
+      ).rejects.toThrow(/write-capable tools but has no delegated slug namespace/);
+    });
+
+    it('allows a read-only bound toolset with no write namespace and persists deny-all slugs', async () => {
+      await seedClient('cursor', {
+        bound_tools: ['search'],
+        bound_source_id: 'default',
+        bound_slug_prefixes: null,
+      });
+      const ctx = makeCtx({ clientId: 'cursor' });
+      const result = await callSubmitAgent(ctx, {
+        prompt: 'read only',
+        // Unknown caller fields must not be spread into the protected job
+        // payload. The operation constructs an explicit whitelist below.
+        trusted_workspace: true,
+      });
+      const rows = await engine.executeRaw<Record<string, unknown>>(
+        `SELECT data FROM minion_jobs WHERE id = $1`,
+        [result.id],
+      );
+      const data = typeof rows[0].data === 'string'
+        ? JSON.parse(rows[0].data as string)
+        : (rows[0].data as Record<string, unknown>);
+      expect(data.allowed_tools).toEqual(['search']);
+      expect(data.allowed_slug_prefixes).toEqual([]);
+      expect(data.trusted_workspace).toBeUndefined();
     });
   });
 

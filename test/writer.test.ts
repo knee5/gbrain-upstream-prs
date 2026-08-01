@@ -560,6 +560,29 @@ describe('link validator', () => {
     expect(findings).toEqual([]);
   });
 
+  test('source-scopes wikilink target lookups', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('validator-source', 'validator-source')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage(
+      'people/alice',
+      { type: 'person', title: 'Scoped Alice', compiled_truth: 'x', frontmatter: {} },
+      { sourceId: 'validator-source' },
+    );
+    const findings = await linkValidator.validate({
+      slug: 'people/bob',
+      type: 'person',
+      compiledTruth: 'Bob met [Alice](../people/alice.md).',
+      timeline: '',
+      frontmatter: {},
+      engine,
+      sourceId: 'validator-source',
+    });
+    expect(findings).toEqual([]);
+  });
+
   test('ignores external URLs', async () => {
     const findings = await linkValidator.validate({
       slug: 'concepts/x',
@@ -650,6 +673,76 @@ describe('back-link validator', () => {
       timeline: '',
       frontmatter: {},
       engine,
+    });
+    expect(findings).toEqual([]);
+  });
+
+  test('source-scopes outbound and reverse-link lookups', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('validator-source', 'validator-source')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage('people/a', { type: 'person', title: 'Default A', compiled_truth: 'x', frontmatter: {} });
+    await engine.putPage('people/c', { type: 'person', title: 'Default C', compiled_truth: 'x', frontmatter: {} });
+    await engine.addLink('people/a', 'people/c', 'default-only', 'mentions');
+
+    await engine.putPage(
+      'people/a',
+      { type: 'person', title: 'Scoped A', compiled_truth: 'x', frontmatter: {} },
+      { sourceId: 'validator-source' },
+    );
+    await engine.putPage(
+      'people/b',
+      { type: 'person', title: 'Scoped B', compiled_truth: 'x', frontmatter: {} },
+      { sourceId: 'validator-source' },
+    );
+    const scopedLinkOpts = {
+      fromSourceId: 'validator-source',
+      toSourceId: 'validator-source',
+    };
+    await engine.addLink(
+      'people/a',
+      'people/b',
+      'scoped',
+      'knows',
+      'manual',
+      undefined,
+      undefined,
+      scopedLinkOpts,
+    );
+    await engine.addLink(
+      'people/b',
+      'people/a',
+      'scoped',
+      'knows_back',
+      'manual',
+      undefined,
+      undefined,
+      scopedLinkOpts,
+    );
+    await engine.addLink(
+      'people/a',
+      'people/c',
+      'cross-source',
+      'mentions',
+      'manual',
+      undefined,
+      undefined,
+      {
+        fromSourceId: 'validator-source',
+        toSourceId: 'default',
+      },
+    );
+
+    const findings = await backLinkValidator.validate({
+      slug: 'people/a',
+      type: 'person',
+      compiledTruth: 'x',
+      timeline: '',
+      frontmatter: {},
+      engine,
+      sourceId: 'validator-source',
     });
     expect(findings).toEqual([]);
   });

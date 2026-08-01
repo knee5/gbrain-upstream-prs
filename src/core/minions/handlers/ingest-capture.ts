@@ -6,16 +6,15 @@
  *
  * Trust posture (E1 + eng-review decisions):
  *   - The event's `untrusted_payload` flag is preserved on the job's
- *     result for audit, but does NOT change the importFromContent call
- *     itself — auto-link runs at the put_page operation layer, which we
- *     deliberately bypass here. The handler calls importFromContent
- *     directly. v1 path: webhook OAuth gate is the trust boundary; the
- *     handler trusts the event-shape but treats content as user-authored
- *     markdown.
- *   - Auto-link integration with the untrusted_payload tag is a v2
- *     improvement (would require routing through the put_page op AND
- *     extending OperationContext with the trust tag). See TODOs in the
- *     plan.
+ *     result for audit. For untrusted OAuth webhook jobs, the database write
+ *     source comes from the server-stamped `job.data.target_source_id`, never
+ *     from caller-controlled event provenance. Missing or stale target-source
+ *     state fails closed.
+ *   - Auto-link runs at the put_page operation layer, which we deliberately
+ *     bypass here. importFromContent still receives `remote: true` for an
+ *     untrusted webhook so gate-owned markers are stripped and import-time
+ *     code-reference edges are disabled. The content lands as a page without
+ *     acquiring a second graph-write surface.
  *
  * Slug resolution (in order):
  *   1. `job.data.slug` if caller provided one
@@ -55,7 +54,13 @@ export function defaultSlugForEvent(event: IngestionEvent, now: Date = new Date(
 
 export function makeIngestCaptureHandler(engine: BrainEngine) {
   return async function ingestCaptureHandler(job: MinionJobContext): Promise<IngestCaptureResult> {
-    const data = job.data as { event?: unknown; slug?: unknown };
+    const data = job.data as {
+      event?: unknown;
+      slug?: unknown;
+      target_source_id?: unknown;
+      oauth_ingest_payload_version?: unknown;
+      noEmbed?: unknown;
+    };
     const event = data.event as IngestionEvent | undefined;
     if (!event) {
       throw new Error('ingest_capture: job.data.event is required');
@@ -78,9 +83,9 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
       slug = defaultSlugForEvent(event);
     }
 
-    // Untrusted-payload posture. For v1, the flag is propagated for audit
-    // but not enforced at this layer (see file header). Future v2 wiring
-    // through put_page will use this flag.
+    // Untrusted-payload posture. The flag is preserved for audit and passed
+    // into importFromContent so page-content trust gates stay active even
+    // though this worker bypasses the put_page operation wrapper.
     const untrustedPayload = event.untrusted_payload === true;
 
     // For text-typed events, content is the inline markdown/text. For
@@ -111,7 +116,7 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
     // embed runs as a separate Minion job (autopilot's embed phase OR an
     // explicit `gbrain embed --stale`). Callers can opt in to inline embed
     // by passing { noEmbed: false } in job.data.
-    const noEmbed = (data as { noEmbed?: unknown }).noEmbed !== false;
+    const noEmbed = data.noEmbed !== false;
 
     // #1522: thread the validated event's provenance into the page write
     // instead of dropping it on the floor. source_kind / source_uri are
@@ -119,21 +124,54 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
     // unconditionally via importFromContent's putPage write-through.
     //
     // event.source_id is the emitter's IngestionSource instance id, NOT
-    // necessarily a registered brain source (the webhook path fabricates
-    // `webhook-<clientId>`, which pages.source_id's FK would reject). It
-    // routes the page write only when BOTH hold:
-    //   - the event is trusted (fail-closed: an untrusted webhook payload
-    //     carries a caller-controlled x-gbrain-source-id header and must
-    //     not get to choose its write source), AND
-    //   - the id names a registered source row.
-    // Otherwise the write keeps the pre-fix default-source routing.
+    // necessarily a registered brain source. Trusted local ingestion keeps
+    // its existing behavior: a registered event source routes the write,
+    // while an unregistered emitter lands in `default`.
+    //
+    // An untrusted OAuth webhook event is different. Its event.source_id is
+    // caller-controlled provenance, so only POST /ingest's server-stamped
+    // job.data.target_source_id may route the write.
+    //
+    // Queue compatibility:
+    //   v2               — current envelope; the server stamp is mandatory.
+    //   unversioned+stamp— jobs queued by the immediately preceding release;
+    //                      honor the already-authenticated stamp.
+    //   unversioned      — older jobs that predate source stamping; route to
+    //                      `default`, never to caller-controlled event.source_id.
+    //
+    // This lets a rolling deploy drain durable pre-upgrade work without
+    // weakening the trust boundary for any newly emitted job.
     let sourceId: string | undefined;
+    const stampedTarget = typeof data.target_source_id === 'string'
+      ? data.target_source_id.trim()
+      : '';
+    let candidateSourceId: string;
     if (!untrustedPayload) {
-      const rows = await engine.executeRaw<{ id: string }>(
-        `SELECT id FROM sources WHERE id = $1`,
-        [event.source_id],
+      candidateSourceId = event.source_id;
+    } else if (data.oauth_ingest_payload_version === 2) {
+      if (stampedTarget.length === 0) {
+        throw new Error(
+          'ingest_capture: v2 untrusted payload requires server-stamped job.data.target_source_id',
+        );
+      }
+      candidateSourceId = stampedTarget;
+    } else if (data.oauth_ingest_payload_version === undefined) {
+      candidateSourceId = stampedTarget || 'default';
+    } else {
+      throw new Error(
+        `ingest_capture: unsupported oauth_ingest_payload_version '${String(data.oauth_ingest_payload_version)}'`,
       );
-      if (rows.length > 0) sourceId = event.source_id;
+    }
+    const rows = await engine.executeRaw<{ id: string }>(
+      `SELECT id FROM sources WHERE id = $1`,
+      [candidateSourceId],
+    );
+    if (rows.length > 0) {
+      sourceId = candidateSourceId;
+    } else if (untrustedPayload) {
+      throw new Error(
+        `ingest_capture: target source '${candidateSourceId}' is not registered`,
+      );
     }
 
     const result = await importFromContent(engine, slug, event.content, {
@@ -142,6 +180,7 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
       source_kind: event.source_kind,
       source_uri: event.source_uri,
       ingested_via: 'ingest_capture',
+      remote: untrustedPayload,
     });
 
     return {

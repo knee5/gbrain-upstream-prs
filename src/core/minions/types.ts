@@ -449,26 +449,35 @@ export interface SubagentHandlerData {
    */
   brain_id?: string;
   /**
-   * Trusted-workspace allow-list for put_page (v0.23 dream cycle).
+   * Per-job write namespace for put_page/add_timeline_entry.
    *
-   * When set, the subagent's put_page calls are bounded to slugs matching
-   * any of these prefix globs (e.g. ["wiki/personal/reflections/*",
-   * "wiki/originals/*"]). When unset/empty, the legacy
-   * `wiki/agents/<subagentId>/...` namespace check applies.
+   * When set, writes are bounded to slugs matching any of these prefix globs
+   * (e.g. ["wiki/personal/reflections/*", "wiki/originals/*"]). An explicit
+   * empty array denies every slug. Only an omitted field selects the legacy
+   * `wiki/agents/<subagentId>/...` check.
    *
-   * Trust comes from PROTECTED_JOB_NAMES gating subagent submission — MCP
-   * cannot reach this field. Only cycle.ts (synthesize/patterns phases)
-   * and direct CLI submitters set it.
+   * This is an authorization scope, NOT evidence that the submitter is a
+   * trusted internal workspace dispatcher. Remote OAuth submit_agent jobs
+   * legitimately carry this field.
    */
   allowed_slug_prefixes?: string[];
+  /**
+   * Internal provenance marker for protected dream-cycle dispatch.
+   *
+   * Only synthesize/patterns set this while submitting directly through the
+   * PROTECTED_JOB_NAMES-gated queue. The remote submit_agent operation builds
+   * an explicit job payload and never copies this field from caller params.
+   * It is intentionally separate from allowed_slug_prefixes: a bounded OAuth
+   * agent must not inherit mounted-brain reads or secondary write backstops.
+   */
+  trusted_workspace?: true;
   /**
    * Brain source the subagent's tool calls are scoped to (#1586).
    *
    * When set, every tool-call `OperationContext.sourceId` uses this value
    * instead of the legacy 'default', so put_page writes land in the cycle's
-   * resolved source. Same trust story as `allowed_slug_prefixes`:
-   * PROTECTED_JOB_NAMES gates subagent submission, so only cycle.ts and
-   * direct CLI submitters can set it. Validated via `validateSourceId` at
+   * resolved source. Remote submit_agent jobs may also receive their
+   * registration-bound source. Validated via `validateSourceId` at
    * tool-registry build time.
    */
   source_id?: string;

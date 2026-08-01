@@ -62,7 +62,8 @@ browser-based clients need:
 gbrain auth register-client claude-ai \
   --scopes "read write" \
   --redirect-uri https://claude.ai/api/mcp/auth_callback \
-  --redirect-uri https://claude.com/api/mcp/auth_callback
+  --redirect-uri https://claude.com/api/mcp/auth_callback \
+  --bound-slug-prefixes "inbox/claude-ai/*"
 # --grant-types is auto-set to authorization_code,refresh_token when
 # --redirect-uri is passed; pass --grant-types explicitly to override.
 
@@ -70,6 +71,7 @@ gbrain auth register-client claude-ai \
 gbrain auth register-client chatgpt \
   --scopes "read write" \
   --redirect-uri https://chatgpt.com/connector/oauth/<HASH> \
+  --bound-slug-prefixes "inbox/chatgpt/*" \
   --token-endpoint-auth-method none
 ```
 
@@ -86,6 +88,11 @@ and the DCR `POST /register` path. Pre-v0.41.3 the CLI hard-coded
 `redirect_uris = []` and `token_endpoint_auth_method = NULL`, forcing
 operators to UPDATE `oauth_clients` rows by hand to make claude.ai work
 without `--enable-dcr`. That footgun is gone.
+
+Every non-admin client with `write` also needs an explicit
+`--bound-slug-prefixes` intake lane. Routine writes outside that lane fail
+closed; use one client-specific namespace per connector and keep `admin` on a
+separate operator credential.
 
 ### DCR consent default (v0.42.55+)
 

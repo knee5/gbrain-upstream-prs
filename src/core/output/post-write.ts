@@ -36,8 +36,16 @@ const LINT_CONFIG_KEY = 'writer.lint_on_put_page';
 export interface PostWriteLintOpts {
   /** Override config lookup; used by tests. If true, always run. */
   force?: boolean;
-  /** Skip file writes; used by tests. */
+  /** Source containing the page and receiving its ingest-log record. */
+  sourceId?: string;
+  /** Skip both local-file and ingest-log writes; used by tests. */
   noLog?: boolean;
+  /**
+   * Skip only the host-local JSONL file while retaining the source-scoped
+   * database audit record. Remote OAuth callers set this to preserve the
+   * DB-only write contract.
+   */
+  noLocalLog?: boolean;
 }
 
 export interface PostWriteLintResult {
@@ -80,7 +88,10 @@ export async function runPostWriteLint(
     return { ran: false, slug, findings: [], skippedReason: 'flag_disabled' };
   }
 
-  const page = await engine.getPage(slug);
+  const page = await engine.getPage(
+    slug,
+    opts.sourceId ? { sourceId: opts.sourceId } : undefined,
+  );
   if (!page) {
     return { ran: false, slug, findings: [], skippedReason: 'page_not_found' };
   }
@@ -97,6 +108,7 @@ export async function runPostWriteLint(
     timeline: page.timeline,
     frontmatter: page.frontmatter ?? {},
     engine,
+    sourceId: opts.sourceId,
   };
 
   const findings: ValidationFinding[] = [];
@@ -111,8 +123,10 @@ export async function runPostWriteLint(
   }
 
   if (findings.length > 0 && !opts.noLog) {
-    writeLocalLintLog(slug, findings);
-    await writeIngestLog(engine, slug, findings);
+    if (!opts.noLocalLog) {
+      writeLocalLintLog(slug, findings);
+    }
+    await writeIngestLog(engine, slug, findings, opts.sourceId);
   }
 
   return { ran: true, slug, findings };
@@ -140,13 +154,19 @@ function writeLocalLintLog(slug: string, findings: ValidationFinding[]): void {
   }
 }
 
-async function writeIngestLog(engine: BrainEngine, slug: string, findings: ValidationFinding[]): Promise<void> {
+async function writeIngestLog(
+  engine: BrainEngine,
+  slug: string,
+  findings: ValidationFinding[],
+  sourceId?: string,
+): Promise<void> {
   try {
     const errorCount = findings.filter(f => f.severity === 'error').length;
     const warningCount = findings.filter(f => f.severity === 'warning').length;
     const summary = `post-write lint: ${errorCount} error, ${warningCount} warning` +
       (errorCount > 0 ? ` (top: ${findings.find(f => f.severity === 'error')!.message.slice(0, 80)})` : '');
     await engine.logIngest({
+      ...(sourceId ? { source_id: sourceId } : {}),
       source_type: 'writer_lint',
       source_ref: slug,
       pages_updated: [slug],

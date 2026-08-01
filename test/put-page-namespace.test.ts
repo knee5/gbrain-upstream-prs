@@ -16,6 +16,8 @@ import type { BrainEngine } from '../src/core/engine.ts';
 
 const put_page = operations.find(o => o.name === 'put_page') as Operation;
 if (!put_page) throw new Error('put_page op missing');
+const add_tag = operations.find(o => o.name === 'add_tag') as Operation;
+if (!add_tag) throw new Error('add_tag op missing');
 
 function makeCtx(overrides: Partial<OperationContext> = {}): OperationContext {
   const engine = {} as BrainEngine; // dry_run short-circuits before touching the engine
@@ -38,16 +40,26 @@ describe('put_page namespace (v0.15 subagent rule)', () => {
       expect(result).toMatchObject({ dry_run: true, action: 'put_page', slug: 'people/alice' });
     });
 
-    test('MCP write (remote=true, viaSubagent=undefined) accepts arbitrary slug', async () => {
-      const ctx = makeCtx({ remote: true });
+    test('stdio MCP write (remote=true, explicit stdio transport) accepts arbitrary slug', async () => {
+      const ctx = makeCtx({ remote: true, transport: 'stdio' });
       const result = await put_page.handler(ctx, { slug: 'wiki/analysis/foo', content: 'stub' });
       expect(result).toMatchObject({ dry_run: true, action: 'put_page', slug: 'wiki/analysis/foo' });
     });
 
-    test('viaSubagent=false is the same as unset', async () => {
-      const ctx = makeCtx({ remote: true, viaSubagent: false, subagentId: 42 });
+    test('stdio viaSubagent=false is the same as unset', async () => {
+      const ctx = makeCtx({ remote: true, transport: 'stdio', viaSubagent: false, subagentId: 42 });
       const result = await put_page.handler(ctx, { slug: 'anything/goes', content: 'stub' });
       expect(result).toMatchObject({ dry_run: true });
+    });
+
+    test('FAILS CLOSED when a non-stdio remote transport drops ctx.auth', async () => {
+      const ctx = makeCtx({ remote: true, transport: undefined, auth: undefined });
+      await expect(put_page.handler(ctx, {
+        slug: 'wiki/analysis/foo',
+        content: 'stub',
+      })).rejects.toMatchObject({
+        code: 'permission_denied',
+      });
     });
   });
 
@@ -110,6 +122,32 @@ describe('put_page namespace (v0.15 subagent rule)', () => {
         expect(e).toBeInstanceOf(OperationError);
         expect((e as OperationError).code).toBe('permission_denied');
       }
+    });
+
+    test('OAuth fence independently confines auth-less subagent write tools', async () => {
+      const ctx = makeCtx({ viaSubagent: true, subagentId: 42 });
+      const allowed = await add_tag.handler(ctx, {
+        slug: 'wiki/agents/42/notes',
+        tag: 'checkpoint',
+      });
+      expect(allowed).toMatchObject({ dry_run: true, action: 'add_tag' });
+
+      await expect(add_tag.handler(ctx, {
+        slug: 'people/alice',
+        tag: 'checkpoint',
+      })).rejects.toMatchObject({
+        code: 'permission_denied',
+      });
+    });
+
+    test('OAuth fence rejects an auth-less subagent marker without an id', async () => {
+      const ctx = makeCtx({ viaSubagent: true });
+      await expect(add_tag.handler(ctx, {
+        slug: 'wiki/agents/42/notes',
+        tag: 'checkpoint',
+      })).rejects.toMatchObject({
+        code: 'permission_denied',
+      });
     });
   });
 });

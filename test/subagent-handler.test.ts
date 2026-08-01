@@ -545,6 +545,94 @@ describe('subagent handler input validation', () => {
     const ctx = await makeCtx({ prompt: 'x', allowed_tools: ['real', 'ghost_tool'] });
     await expect(handler(ctx)).rejects.toThrow(/unknown tool/);
   });
+
+  test('allowed_tools empty array exposes no tools instead of the full registry', async () => {
+    const tool = makeEchoTool('must-not-be-exposed');
+    const client = new FakeMessagesClient([
+      { content: [{ type: 'text', text: 'no tools needed' }] as any, stop_reason: 'end_turn' },
+    ]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [tool] });
+    const ctx = await makeCtx({ prompt: 'x', allowed_tools: [] });
+
+    await handler(ctx);
+
+    expect(client.calls).toHaveLength(1);
+    expect(client.calls[0]!.tools).toBeUndefined();
+  });
+
+  test('malformed allowed_tools payload fails closed before model dispatch', async () => {
+    const client = new FakeMessagesClient([]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [] });
+    const ctx = await makeCtx({
+      prompt: 'x',
+      allowed_tools: ['search', 7],
+    });
+
+    await expect(handler(ctx)).rejects.toThrow(/allowed_tools.*non-empty strings/);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  test('malformed allowed_slug_prefixes payload fails closed before model dispatch', async () => {
+    const client = new FakeMessagesClient([]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [] });
+    const nullCtx = await makeCtx({
+      prompt: 'x',
+      allowed_slug_prefixes: null,
+    });
+    await expect(handler(nullCtx)).rejects.toThrow(/allowed_slug_prefixes.*non-empty strings/);
+
+    const mixedCtx = await makeCtx({
+      prompt: 'x',
+      allowed_slug_prefixes: ['inbox/client/*', 7],
+    });
+    await expect(handler(mixedCtx)).rejects.toThrow(/allowed_slug_prefixes.*non-empty strings/);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  test('trusted-workspace provenance requires a namespace and rejects remote-owned jobs', async () => {
+    const client = new FakeMessagesClient([]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [] });
+    const noNamespace = await makeCtx({
+      prompt: 'x',
+      trusted_workspace: true,
+      allowed_slug_prefixes: [],
+    });
+    await expect(handler(noNamespace)).rejects.toThrow(/trusted-workspace.*non-empty/);
+
+    const remoteOwned = await makeCtx({
+      prompt: 'x',
+      trusted_workspace: true,
+      allowed_slug_prefixes: ['wiki/personal/reflections/*'],
+      __owner_client_id: 'oauth-client',
+    });
+    await expect(handler(remoteOwned)).rejects.toThrow(/remote-owned.*trusted-workspace/);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  test('trusted-workspace provenance flows from job data into the tool-context builder', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const client = new FakeMessagesClient([
+      { content: [{ type: 'text', text: 'done' }] as any, stop_reason: 'end_turn' },
+    ]);
+    const handler = makeSubagentHandler({
+      engine,
+      client,
+      buildToolRegistry: (opts) => {
+        captured = opts as unknown as Record<string, unknown>;
+        return [];
+      },
+    });
+    const ctx = await makeCtx({
+      prompt: 'x',
+      trusted_workspace: true,
+      allowed_slug_prefixes: ['wiki/personal/reflections/*'],
+    });
+
+    await handler(ctx);
+
+    expect(captured?.trustedWorkspace).toBe(true);
+    expect(captured?.allowedSlugPrefixes).toEqual(['wiki/personal/reflections/*']);
+  });
 });
 
 describe('makeSubagentHandler default client construction', () => {

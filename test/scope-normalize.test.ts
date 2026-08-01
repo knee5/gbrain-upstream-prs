@@ -14,7 +14,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { normalizeScopesInput, InvalidScopeError } from '../src/core/scope.ts';
+import {
+  normalizeBoundSlugPrefixesInput,
+  normalizeScopesInput,
+  InvalidScopeError,
+} from '../src/core/scope.ts';
 
 describe('normalizeScopesInput — happy paths', () => {
   test('undefined → "read" default', () => {
@@ -134,5 +138,36 @@ describe('normalizeScopesInput — determinism', () => {
   test('hierarchy-aware scopes (sources_admin, users_admin, agent) accepted', () => {
     expect(normalizeScopesInput(['sources_admin', 'users_admin'])).toBe('sources_admin users_admin');
     expect(normalizeScopesInput('agent')).toBe('agent');
+  });
+});
+
+describe('normalizeBoundSlugPrefixesInput', () => {
+  test('missing input means no namespace binding', () => {
+    expect(normalizeBoundSlugPrefixesInput(undefined)).toEqual([]);
+    expect(normalizeBoundSlugPrefixesInput(null)).toEqual([]);
+  });
+
+  test('accepts comma/newline strings, lowercases, dedupes, and sorts', () => {
+    expect(normalizeBoundSlugPrefixesInput(
+      'Projects/Acme-Example/*,\ninbox/chatgpt/*\nprojects/acme-example/*',
+    )).toEqual(['inbox/chatgpt/*', 'projects/acme-example/*']);
+  });
+
+  test('accepts exact slugs and namespace globs in an array', () => {
+    expect(normalizeBoundSlugPrefixesInput([
+      'inbox/chatgpt/single-note',
+      'inbox/chatgpt/*',
+    ])).toEqual(['inbox/chatgpt/*', 'inbox/chatgpt/single-note']);
+  });
+
+  test('rejects malformed input and unsupported wildcard positions', () => {
+    expect(() => normalizeBoundSlugPrefixesInput({ prefix: 'inbox/*' }))
+      .toThrow(/string or array/);
+    expect(() => normalizeBoundSlugPrefixesInput(['inbox/*/escape']))
+      .toThrow(/Wildcards are supported only/);
+    expect(() => normalizeBoundSlugPrefixesInput(['../escape/*']))
+      .toThrow(/path traversal/);
+    expect(() => normalizeBoundSlugPrefixesInput(['']))
+      .toThrow(/empty strings/);
   });
 });

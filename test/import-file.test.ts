@@ -468,6 +468,42 @@ ${longText}
   });
 });
 
+describe('importFromContent code-reference trust boundary', () => {
+  const codeReferencePage = [
+    '---',
+    'title: Boundary test',
+    '---',
+    '',
+    'Implementation detail: src/core/operations.ts:1043',
+  ].join('\n');
+
+  test('trusted local imports retain bidirectional doc-to-code linking', async () => {
+    const engine = mockEngine();
+    const result = await importFromContent(
+      engine,
+      'docs/local-boundary-test',
+      codeReferencePage,
+      { noEmbed: true },
+    );
+    expect(result.status).toBe('imported');
+    const linkCalls = (engine as any)._calls.filter((call: any) => call.method === 'addLink');
+    expect(linkCalls).toHaveLength(2);
+  });
+
+  test('remote imports cannot create edges outside their page namespace', async () => {
+    const engine = mockEngine();
+    const result = await importFromContent(
+      engine,
+      'inbox/remote-client/boundary-test',
+      codeReferencePage,
+      { noEmbed: true, remote: true },
+    );
+    expect(result.status).toBe('imported');
+    const linkCalls = (engine as any)._calls.filter((call: any) => call.method === 'addLink');
+    expect(linkCalls).toHaveLength(0);
+  });
+});
+
 describe('importFile — CJK wave (v0.32.7)', () => {
   test('REGRESSION: pure-CJK filename with NO frontmatter slug imports cleanly as CJK slug', async () => {
     // After #115, slugifyPath('小米.md') = '小米' (CJK preserved). The

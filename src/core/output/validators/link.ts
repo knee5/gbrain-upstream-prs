@@ -64,7 +64,10 @@ export const linkValidator: PageValidator = {
 
     // Batch-check which targets exist.
     for (const slug of internalTargets) {
-      const page = await ctx.engine.getPage(slug);
+      const page = await ctx.engine.getPage(
+        slug,
+        ctx.sourceId ? { sourceId: ctx.sourceId } : undefined,
+      );
       if (page) continue;
       const positions = linkPositions.get(slug) ?? [];
       for (const pos of positions) {

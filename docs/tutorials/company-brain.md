@@ -186,31 +186,35 @@ Each teammate (or each AI agent for a teammate) gets their own OAuth client. The
 # Alice (sales): writes customers/alice-example, reads customers + shared
 gbrain auth register-client alice-example \
   --grant-types client_credentials \
-  --scopes read,write \
+  --scopes "read write" \
   --source customers \
-  --federated-read customers,shared
+  --federated-read customers,shared \
+  --bound-slug-prefixes "alice-example/*"
 
 # Bob (ops): writes internal/bob-example, reads internal + shared
 gbrain auth register-client bob-example \
   --grant-types client_credentials \
-  --scopes read,write \
+  --scopes "read write" \
   --source internal \
-  --federated-read internal,shared
+  --federated-read internal,shared \
+  --bound-slug-prefixes "bob-example/*"
 
 # Carol (legal): writes shared/legal, reads all three
 gbrain auth register-client carol-example \
   --grant-types client_credentials \
-  --scopes read,write \
+  --scopes "read write" \
   --source shared \
-  --federated-read shared,customers,internal
+  --federated-read shared,customers,internal \
+  --bound-slug-prefixes "legal/*"
 ```
 
 Each `register-client` command prints a `client_id` and a `client_secret`. Save both for each teammate. They go into the teammate's local agent config.
 
 A note on the flags:
 
-- `--scopes read,write` lets the client query the brain and write new pages. You can omit `write` for read-only clients (executive summaries, dashboards). The `admin` scope is needed for operational commands like `gbrain remote doctor` and is usually reserved for your own admin client.
-- `--source` controls write authority. A client can only write to one source. Within that source, your folder convention from Part 3 keeps each person's writes in their own subfolder.
+- `--scopes "read write"` lets the client query the brain and write new pages. You can omit `write` for read-only clients (executive summaries, dashboards). The `admin` scope is needed for operational commands like `gbrain remote doctor` and is usually reserved for your own admin client.
+- `--source` controls which source receives writes. A client can write to one source.
+- `--bound-slug-prefixes` is the enforced folder boundary inside that source. The folder convention from Part 3 is therefore authorization, not just naming: writes outside the teammate's prefix fail closed.
 - `--federated-read` controls read scope. A client can read from one or more sources.
 
 ### Verify the scoping actually scopes
@@ -537,9 +541,10 @@ Each parallel sync worker opens its own pool. With three sources and the default
 ```bash
 gbrain auth register-client diana-example \
   --grant-types client_credentials \
-  --scopes read,write \
+  --scopes "read write" \
   --source shared \
-  --federated-read shared,customers,internal
+  --federated-read shared,customers,internal \
+  --bound-slug-prefixes "diana-example/*"
 ```
 
 That's it. Add or rotate teammates as the org grows.
