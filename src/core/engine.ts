@@ -2242,8 +2242,11 @@ export interface BrainEngine {
    * source — a slug-only UPDATE would fan out across sources, the same bug
    * that the v0.18.0 link batches fixed for cross-source edges.
    *
-   * Returns the count of rows actually updated. Pages whose `(slug, source_id)`
-   * tuple doesn't exist (race with delete) are silently skipped.
+   * Exact duplicate composite keys collapse; conflicting duplicate keys reject
+   * before SQL so the target weight is deterministic. Returns the count of rows
+   * actually updated. Pages whose `(slug, source_id)` tuple doesn't exist (race
+   * with delete) are silently skipped. An all-identical batch does not issue an
+   * UPDATE, preserving the page-generation cache bookmark.
    */
   setEmotionalWeightBatch(rows: EmotionalWeightWriteRow[]): Promise<number>;
 

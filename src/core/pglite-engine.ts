@@ -81,6 +81,7 @@ import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, b
 import { unverifiedExtractionFragment } from './extraction-review.ts';
 import { shouldExcludeFromOrphanReporting, loadOrphanPolicyOverrides } from './orphan-policy.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from './link-extraction.ts';
+import { normalizeEmotionalWeightBatch } from './emotional-weight-batch.ts';
 import {
   normalizeEngineColumn,
   buildVectorCastFragment,
@@ -6030,13 +6031,42 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async setEmotionalWeightBatch(rows: EmotionalWeightWriteRow[]): Promise<number> {
-    if (rows.length === 0) return 0;
+    const normalizedRows = normalizeEmotionalWeightBatch(rows);
+    if (normalizedRows.length === 0) return 0;
+
+    // Transaction-scoped clones expose a Transaction without .transaction().
+    // On the root engine, pin the preflight lock and UPDATE together so an
+    // all-identical batch never fires the statement-level generation trigger.
+    if (typeof (this.db as unknown as { transaction?: unknown }).transaction !== 'function') {
+      return this.setEmotionalWeightBatchInTransaction(normalizedRows);
+    }
+    return this.transaction(async engine =>
+      (engine as PGLiteEngine).setEmotionalWeightBatchInTransaction(normalizedRows));
+  }
+
+  private async setEmotionalWeightBatchInTransaction(
+    rows: EmotionalWeightWriteRow[],
+  ): Promise<number> {
     const slugs = rows.map(r => r.slug);
     const sourceIds = rows.map(r => r.source_id);
     const weights = rows.map(r => r.weight);
     // Composite-keyed UPDATE FROM unnest (codex C4#3). The distinctness
     // predicate prevents no-op tuple rewrites and makes the returned count
     // mean rows whose weight actually changed. Mirror of postgres-engine.ts.
+    const gate = await this.db.query<{ source_id: string; slug: string }>(
+      `SELECT pages.source_id, pages.slug
+         FROM unnest($1::text[], $2::text[], $3::real[])
+           AS u(slug, source_id, weight)
+         JOIN pages
+           ON pages.slug = u.slug
+          AND pages.source_id = u.source_id
+        WHERE pages.emotional_weight IS DISTINCT FROM u.weight
+        ORDER BY pages.source_id, pages.slug
+        FOR UPDATE OF pages`,
+      [slugs, sourceIds, weights],
+    );
+    if (gate.rows.length === 0) return 0;
+
     const result = await this.db.query(
       `UPDATE pages
           SET emotional_weight = u.weight,

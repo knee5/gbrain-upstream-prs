@@ -40,6 +40,8 @@ export interface RecomputeEmotionalWeightOpts {
 export interface RecomputeEmotionalWeightResult extends PhaseResult {
   /** Number of pages whose emotional_weight was (re)computed. */
   pages_recomputed: number;
+  /** Number of rows whose stored emotional_weight actually changed. */
+  pages_updated: number;
 }
 
 export async function runPhaseRecomputeEmotionalWeight(
@@ -67,9 +69,10 @@ export async function runPhaseRecomputeEmotionalWeight(
     // Incremental path: empty array means "no changes touched" — record
     // a zero-work success and return without touching the DB.
     if (Array.isArray(opts.affectedSlugs) && opts.affectedSlugs.length === 0) {
-      return result('ok', 'recompute_emotional_weight (incremental, 0 slugs)', 0, {
+      return result('ok', 'recompute_emotional_weight (incremental, 0 slugs)', 0, 0, {
         mode: 'incremental',
         pages_recomputed: 0,
+        pages_updated: 0,
       }, start);
     }
 
@@ -84,19 +87,28 @@ export async function runPhaseRecomputeEmotionalWeight(
     }));
 
     if (opts.dryRun) {
-      return result('ok', `recompute_emotional_weight (dry-run, ${writes.length} pages)`, writes.length, {
+      return result('ok', `recompute_emotional_weight (dry-run, ${writes.length} pages)`, writes.length, 0, {
         mode: opts.affectedSlugs ? 'incremental' : 'full',
         pages_recomputed: writes.length,
+        pages_updated: 0,
         dry_run: true,
       }, start);
     }
 
     const updated = await engine.setEmotionalWeightBatch(writes);
 
-    return result('ok', `recompute_emotional_weight (${updated} pages)`, updated, {
-      mode: opts.affectedSlugs ? 'incremental' : 'full',
-      pages_recomputed: updated,
-    }, start);
+    return result(
+      'ok',
+      `recompute_emotional_weight (${writes.length} pages, ${updated} updated)`,
+      writes.length,
+      updated,
+      {
+        mode: opts.affectedSlugs ? 'incremental' : 'full',
+        pages_recomputed: writes.length,
+        pages_updated: updated,
+      },
+      start,
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const err: PhaseError = {
@@ -112,6 +124,7 @@ export async function runPhaseRecomputeEmotionalWeight(
       details: { error: err },
       error: err,
       pages_recomputed: 0,
+      pages_updated: 0,
     };
   }
 }
@@ -120,6 +133,7 @@ function result(
   status: 'ok',
   summary: string,
   pagesRecomputed: number,
+  pagesUpdated: number,
   details: Record<string, unknown>,
   start: number,
 ): RecomputeEmotionalWeightResult {
@@ -130,5 +144,6 @@ function result(
     summary,
     details,
     pages_recomputed: pagesRecomputed,
+    pages_updated: pagesUpdated,
   };
 }

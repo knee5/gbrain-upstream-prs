@@ -2,6 +2,16 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.42.73.0] - 2026-08-02
+
+**Repeated salience cycles now leave an unchanged brain truly untouched.**
+
+Emotional-weight recomputation already avoided rewriting page rows whose value stayed the same, but PostgreSQL still ran the statement-level page-generation trigger for an empty update. That advanced the brain's generation clock and invalidated caches even though no page changed. The update path now checks and locks the rows that really need a new weight before issuing the update; an all-identical batch returns without firing the statement at all.
+
+The same behavior is enforced in PostgreSQL and PGLite, remains scoped by `(source_id, slug)`, and handles duplicate inputs deterministically: identical duplicates collapse, while conflicting weights for the same page fail closed. Overlapping batches lock targets in a stable order so concurrent cycles do not deadlock or leave a mixed result.
+
+Cycle reports now keep two facts separate: how many pages were recomputed and how many stored values actually changed. A healthy repeat can therefore report that it evaluated the expected page set while also proving it wrote zero rows.
+
 ## [0.42.72.1] - 2026-08-02
 
 **Every issue and pull request now needs a human-written paragraph and a screenshot of gbrain actually being used.**

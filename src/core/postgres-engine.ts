@@ -93,6 +93,7 @@ import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { SOURCE_CONFIG_OBJECT_SQL } from './source-config-sql.ts';
 import { shouldExcludeFromOrphanReporting, loadOrphanPolicyOverrides } from './orphan-policy.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from './link-extraction.ts';
+import { normalizeEmotionalWeightBatch } from './emotional-weight-batch.ts';
 
 function escapeSqlStringLiteral(value: string): string {
   return value.replace(/'/g, "''");
@@ -6326,7 +6327,23 @@ export class PostgresEngine implements BrainEngine {
   }
 
   async setEmotionalWeightBatch(rows: EmotionalWeightWriteRow[]): Promise<number> {
-    if (rows.length === 0) return 0;
+    const normalizedRows = normalizeEmotionalWeightBatch(rows);
+    if (normalizedRows.length === 0) return 0;
+
+    // A transaction-scoped clone already owns its connection. Otherwise pin
+    // the preflight lock and UPDATE to one transaction so a true no-op never
+    // executes an UPDATE statement (the statement trigger advances the global
+    // page-generation clock even when zero rows match).
+    if (typeof (this.sql as unknown as { begin?: unknown }).begin !== 'function') {
+      return this.setEmotionalWeightBatchInTransaction(normalizedRows);
+    }
+    return this.transaction(async engine =>
+      (engine as PostgresEngine).setEmotionalWeightBatchInTransaction(normalizedRows));
+  }
+
+  private async setEmotionalWeightBatchInTransaction(
+    rows: EmotionalWeightWriteRow[],
+  ): Promise<number> {
     const sql = this.sql;
     const slugs = rows.map(r => r.slug);
     const sourceIds = rows.map(r => r.source_id);
@@ -6334,10 +6351,22 @@ export class PostgresEngine implements BrainEngine {
     // Composite-keyed UPDATE FROM unnest (codex C4#3): pages.slug is unique
     // only within a source, so a slug-only join would fan out across sources.
     //
-    // Bump salience_touched_at only when emotional_weight actually changes.
-    // The IS DISTINCT FROM guard is load-bearing: without it Postgres still
-    // rewrites every matched tuple. Returning only changed rows also keeps the
-    // phase count honest.
+    // Lock every changed target in composite-key order before deciding to issue
+    // the UPDATE. Deterministic ordering prevents overlapping batches from
+    // deadlocking after each preflight locks a different first row.
+    const gate = await sql`
+      SELECT pages.source_id, pages.slug
+        FROM unnest(${slugs}::text[], ${sourceIds}::text[], ${weights}::real[])
+          AS u(slug, source_id, weight)
+        JOIN pages
+          ON pages.slug = u.slug
+         AND pages.source_id = u.source_id
+       WHERE pages.emotional_weight IS DISTINCT FROM u.weight
+       ORDER BY pages.source_id, pages.slug
+       FOR UPDATE OF pages
+    `;
+    if (gate.length === 0) return 0;
+
     const result = await sql`
       UPDATE pages
          SET emotional_weight = u.weight,

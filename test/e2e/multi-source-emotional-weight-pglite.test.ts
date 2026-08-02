@@ -85,6 +85,12 @@ describe('v0.29 E2E — setEmotionalWeightBatch is multi-source safe', () => {
     ]);
     expect(first).toBe(2);
 
+    await engine.executeRaw(
+      `UPDATE pages
+          SET salience_touched_at = '2000-01-01T00:00:00Z'::timestamptz
+        WHERE slug = 'shared/page'`,
+    );
+
     const before = await engine.executeRaw<{
       source_id: string;
       salience_touched_at: string;
@@ -114,12 +120,45 @@ describe('v0.29 E2E — setEmotionalWeightBatch is multi-source safe', () => {
     expect(afterMixed[0].source_id).toBe('default');
     expect(afterMixed[0].salience_touched_at).toBe(before[0].salience_touched_at);
     expect(Number(afterMixed[1].emotional_weight)).toBeCloseTo(0.51, 5);
+    expect(new Date(afterMixed[1].salience_touched_at).getTime())
+      .toBeGreaterThan(new Date(before[1].salience_touched_at).getTime());
 
+    const generationBeforeNoOp = await engine.executeRaw<{ value: string }>(
+      `SELECT last_value::text AS value FROM page_generation_clock_seq`,
+    );
     const allNoOp = await engine.setEmotionalWeightBatch([
       { slug: 'shared/page', source_id: 'default', weight: 0.31 },
       { slug: 'shared/page', source_id: 'src-b', weight: 0.51 },
     ]);
     expect(allNoOp).toBe(0);
+    const generationAfterNoOp = await engine.executeRaw<{ value: string }>(
+      `SELECT last_value::text AS value FROM page_generation_clock_seq`,
+    );
+    expect(generationAfterNoOp[0].value).toBe(generationBeforeNoOp[0].value);
+  });
+
+  test('exact duplicate keys collapse and conflicting duplicates fail closed', async () => {
+    expect(await engine.setEmotionalWeightBatch([
+      { slug: 'shared/page', source_id: 'default', weight: 0.71 },
+      { slug: 'shared/page', source_id: 'default', weight: 0.71 },
+    ])).toBe(1);
+
+    const beforeConflict = await engine.executeRaw<{ emotional_weight: number }>(
+      `SELECT emotional_weight
+         FROM pages
+        WHERE slug = 'shared/page' AND source_id = 'default'`,
+    );
+    await expect(engine.setEmotionalWeightBatch([
+      { slug: 'shared/page', source_id: 'default', weight: 0.81 },
+      { slug: 'shared/page', source_id: 'default', weight: 0.91 },
+    ])).rejects.toThrow('Conflicting emotional-weight rows');
+    const afterConflict = await engine.executeRaw<{ emotional_weight: number }>(
+      `SELECT emotional_weight
+         FROM pages
+        WHERE slug = 'shared/page' AND source_id = 'default'`,
+    );
+    expect(Number(afterConflict[0].emotional_weight))
+      .toBeCloseTo(Number(beforeConflict[0].emotional_weight), 5);
   });
 
   test('non-existent (slug, source_id) tuple is silently skipped (no error)', async () => {
