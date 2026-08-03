@@ -2707,7 +2707,7 @@ function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): Cyc
     totals.pages_synced > 0 ||
     totals.pages_extracted > 0 ||
     totals.pages_embedded > 0 ||
-    totals.pages_emotional_weight_recomputed > 0 ||
+    totals.pages_emotional_weight_updated > 0 ||
     // A7: a code brain runs `gbrain dream` specifically to build the call graph
     // (resolve_symbol_edges). Without these, an edges-only cycle reports 'clean'
     // — indistinguishable from "nothing happened" even when N edges resolved.

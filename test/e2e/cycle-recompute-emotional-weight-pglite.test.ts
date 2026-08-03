@@ -97,6 +97,7 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(Number(repeatPhase!.details.pages_updated)).toBe(0);
     expect(repeat.totals.pages_emotional_weight_recomputed).toBeGreaterThanOrEqual(2);
     expect(repeat.totals.pages_emotional_weight_updated).toBe(0);
+    expect(repeat.status).toBe('clean');
   });
 
   test('dry-run skips the UPDATE but reports a would-write count', async () => {
