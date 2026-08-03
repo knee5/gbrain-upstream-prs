@@ -72,6 +72,7 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(phaseResult!.status).toBe('ok');
     expect(phaseResult!.details.mode).toBe('full');
     expect(Number(phaseResult!.details.pages_recomputed)).toBeGreaterThanOrEqual(2);
+    expect(Number(phaseResult!.details.pages_updated)).toBeGreaterThanOrEqual(1);
 
     // Verify both pages got their weights populated.
     const wedding = await engine.executeRaw<{ emotional_weight: number }>(
@@ -85,6 +86,18 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
 
     // Totals roll up the new field.
     expect(report.totals.pages_emotional_weight_recomputed).toBeGreaterThanOrEqual(2);
+    expect(report.totals.pages_emotional_weight_updated).toBeGreaterThanOrEqual(1);
+
+    const repeat = await runCycle(engine, {
+      brainDir,
+      phases: ['recompute_emotional_weight'],
+    });
+    const repeatPhase = repeat.phases.find(p => p.phase === 'recompute_emotional_weight');
+    expect(Number(repeatPhase!.details.pages_recomputed)).toBeGreaterThanOrEqual(2);
+    expect(Number(repeatPhase!.details.pages_updated)).toBe(0);
+    expect(repeat.totals.pages_emotional_weight_recomputed).toBeGreaterThanOrEqual(2);
+    expect(repeat.totals.pages_emotional_weight_updated).toBe(0);
+    expect(repeat.status).toBe('clean');
   });
 
   test('dry-run skips the UPDATE but reports a would-write count', async () => {
@@ -101,6 +114,7 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(phaseResult!.status).toBe('ok');
     expect(phaseResult!.details.dry_run).toBe(true);
     expect(Number(phaseResult!.details.pages_recomputed)).toBeGreaterThanOrEqual(2);
+    expect(Number(phaseResult!.details.pages_updated)).toBe(0);
 
     // Sentinel survives because dry-run never writes.
     const after = await engine.executeRaw<{ emotional_weight: number }>(

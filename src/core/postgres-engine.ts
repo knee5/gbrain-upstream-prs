@@ -93,6 +93,7 @@ import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { SOURCE_CONFIG_OBJECT_SQL } from './source-config-sql.ts';
 import { shouldExcludeFromOrphanReporting, loadOrphanPolicyOverrides } from './orphan-policy.ts';
 import { LINK_EXTRACTOR_VERSION_TS } from './link-extraction.ts';
+import { normalizeEmotionalWeightBatch } from './emotional-weight-batch.ts';
 
 function escapeSqlStringLiteral(value: string): string {
   return value.replace(/'/g, "''");
@@ -6326,7 +6327,23 @@ export class PostgresEngine implements BrainEngine {
   }
 
   async setEmotionalWeightBatch(rows: EmotionalWeightWriteRow[]): Promise<number> {
-    if (rows.length === 0) return 0;
+    const normalizedRows = normalizeEmotionalWeightBatch(rows);
+    if (normalizedRows.length === 0) return 0;
+
+    // A transaction-scoped clone already owns its connection. Otherwise pin
+    // the preflight lock and UPDATE to one transaction so a true no-op never
+    // executes an UPDATE statement (the statement trigger advances the global
+    // page-generation clock even when zero rows match).
+    if (typeof (this.sql as unknown as { begin?: unknown }).begin !== 'function') {
+      return this.setEmotionalWeightBatchInTransaction(normalizedRows);
+    }
+    return this.transaction(async engine =>
+      (engine as PostgresEngine).setEmotionalWeightBatchInTransaction(normalizedRows));
+  }
+
+  private async setEmotionalWeightBatchInTransaction(
+    rows: EmotionalWeightWriteRow[],
+  ): Promise<number> {
     const sql = this.sql;
     const slugs = rows.map(r => r.slug);
     const sourceIds = rows.map(r => r.source_id);
@@ -6334,22 +6351,34 @@ export class PostgresEngine implements BrainEngine {
     // Composite-keyed UPDATE FROM unnest (codex C4#3): pages.slug is unique
     // only within a source, so a slug-only join would fan out across sources.
     //
-    // v0.29.1: bump salience_touched_at to NOW() ONLY when emotional_weight
-    // actually changes. The salience query window then includes the page in
-    // GREATEST(updated_at, salience_touched_at) >= boundary, so a previously
-    // calm page that just became salient surfaces in the recent salience
-    // results without a content edit. No-op writes (same weight) leave
-    // salience_touched_at alone — preserves "actual change" semantics.
+    // Lock every existing target in composite-key order before deciding to
+    // issue the UPDATE. Locking only rows that are currently different lets
+    // complementary concurrent batches lock disjoint subsets and commit a
+    // mixed result that matches neither caller. Deterministic all-target
+    // locking serializes overlapping batches while preserving the true no-op
+    // fast path below.
+    const gate = await sql`
+      SELECT pages.source_id, pages.slug,
+             pages.emotional_weight IS DISTINCT FROM u.weight AS needs_update
+        FROM unnest(${slugs}::text[], ${sourceIds}::text[], ${weights}::real[])
+          AS u(slug, source_id, weight)
+        JOIN pages
+          ON pages.slug = u.slug
+         AND pages.source_id = u.source_id
+       ORDER BY pages.source_id, pages.slug
+       FOR UPDATE OF pages
+    `;
+    if (!gate.some((row: Record<string, unknown>) => row.needs_update === true)) return 0;
+
     const result = await sql`
       UPDATE pages
          SET emotional_weight = u.weight,
-             salience_touched_at = CASE
-               WHEN pages.emotional_weight IS DISTINCT FROM u.weight THEN now()
-               ELSE pages.salience_touched_at
-             END
+             salience_touched_at = now()
         FROM unnest(${slugs}::text[], ${sourceIds}::text[], ${weights}::real[])
           AS u(slug, source_id, weight)
-       WHERE pages.slug = u.slug AND pages.source_id = u.source_id
+       WHERE pages.slug = u.slug
+         AND pages.source_id = u.source_id
+         AND pages.emotional_weight IS DISTINCT FROM u.weight
       RETURNING 1
     `;
     return result.length;

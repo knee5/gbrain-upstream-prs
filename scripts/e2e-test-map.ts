@@ -35,7 +35,15 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
     "test/e2e/openclaw-plugin-load-real.test.ts",
   ],
   // dream.ts is a thin alias over runCycle in cycle.ts.
-  "src/core/cycle.ts": ["test/e2e/cycle.test.ts", "test/e2e/dream.test.ts"],
+  "src/core/cycle.ts": [
+    "test/e2e/cycle.test.ts",
+    "test/e2e/dream.test.ts",
+    "test/e2e/cycle-recompute-emotional-weight-pglite.test.ts",
+  ],
+  "src/core/cycle/recompute-emotional-weight.ts": [
+    "test/e2e/backfill-perf-pglite.test.ts",
+    "test/e2e/cycle-recompute-emotional-weight-pglite.test.ts",
+  ],
   // Multi-source sync writes share the per-source bookmark anchor.
   "src/core/sync.ts": ["test/e2e/sync.test.ts", "test/e2e/multi-source.test.ts"],
   // v0.32.8 multi-source bug class regression suite — fires on any cycle
@@ -67,6 +75,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
   ],
   // postgres.js bind paths + JSONB shapes + parity vs PGLite.
   "src/core/postgres-engine.ts": [
+    "test/e2e/emotional-weight-noop-postgres.test.ts",
     "test/e2e/postgres-bootstrap.test.ts",
     "test/e2e/postgres-jsonb.test.ts",
     "test/e2e/jsonb-roundtrip.test.ts",
@@ -77,6 +86,7 @@ export const E2E_TEST_MAP: Record<string, string[]> = {
   ],
   // PGLite bootstrap path + parity guard.
   "src/core/pglite-engine.ts": [
+    "test/e2e/multi-source-emotional-weight-pglite.test.ts",
     "test/e2e/postgres-bootstrap.test.ts",
     "test/e2e/engine-parity.test.ts",
     "test/e2e/schema-drift.test.ts",

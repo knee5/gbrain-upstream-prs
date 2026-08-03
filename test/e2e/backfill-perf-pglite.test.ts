@@ -55,6 +55,15 @@ describe('v0.29 — recompute_emotional_weight perf on a 1000-page fixture', () 
 
     expect(result.status).toBe('ok');
     expect(result.pages_recomputed).toBeGreaterThanOrEqual(1000);
+    expect(result.pages_updated).toBeGreaterThan(0);
+    expect(result.pages_updated).toBeLessThan(result.pages_recomputed);
     expect(elapsedMs).toBeLessThan(5_000);
+
+    const repeatStart = Date.now();
+    const repeat = await runPhaseRecomputeEmotionalWeight(engine, {});
+    const repeatElapsedMs = Date.now() - repeatStart;
+    expect(repeat.pages_recomputed).toBeGreaterThanOrEqual(1000);
+    expect(repeat.pages_updated).toBe(0);
+    expect(repeatElapsedMs).toBeLessThan(5_000);
   }, 30_000);
 });

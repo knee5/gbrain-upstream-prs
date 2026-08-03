@@ -400,6 +400,8 @@ export interface CycleReport {
     patterns_written: number;
     /** v0.29: number of pages whose emotional_weight was (re)computed. */
     pages_emotional_weight_recomputed: number;
+    /** Number of page rows whose stored emotional_weight actually changed. */
+    pages_emotional_weight_updated: number;
     /** v0.34: number of code edges resolved (1 candidate) by the resolve_symbol_edges phase. */
     edges_resolved: number;
     /** v0.34: number of code edges marked ambiguous (2+ candidates) by the resolve_symbol_edges phase. */
@@ -2630,6 +2632,7 @@ function emptyTotals(): CycleReport['totals'] {
     synth_pages_written: 0,
     patterns_written: 0,
     pages_emotional_weight_recomputed: 0,
+    pages_emotional_weight_updated: 0,
     edges_resolved: 0,
     edges_ambiguous: 0,
     purged_sources_count: 0,
@@ -2668,6 +2671,7 @@ function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
       t.patterns_written = Number(p.details.patterns_written ?? 0);
     } else if (p.phase === 'recompute_emotional_weight' && p.details) {
       t.pages_emotional_weight_recomputed = Number(p.details.pages_recomputed ?? 0);
+      t.pages_emotional_weight_updated = Number(p.details.pages_updated ?? 0);
     } else if (p.phase === 'resolve_symbol_edges' && p.details) {
       t.edges_resolved = Number(p.details.edges_resolved ?? 0);
       t.edges_ambiguous = Number(p.details.edges_ambiguous ?? 0);
@@ -2703,7 +2707,7 @@ function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): Cyc
     totals.pages_synced > 0 ||
     totals.pages_extracted > 0 ||
     totals.pages_embedded > 0 ||
-    totals.pages_emotional_weight_recomputed > 0 ||
+    totals.pages_emotional_weight_updated > 0 ||
     // A7: a code brain runs `gbrain dream` specifically to build the call graph
     // (resolve_symbol_edges). Without these, an edges-only cycle reports 'clean'
     // — indistinguishable from "nothing happened" even when N edges resolved.

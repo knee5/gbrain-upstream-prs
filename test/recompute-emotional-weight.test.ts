@@ -16,7 +16,11 @@ interface FakeEngine {
   getConfig(key: string): Promise<string | null>;
 }
 
-function makeEngine(rows: EmotionalWeightInputRow[], configMap: Record<string, string | null> = {}): FakeEngine & {
+function makeEngine(
+  rows: EmotionalWeightInputRow[],
+  configMap: Record<string, string | null> = {},
+  updatedCount?: number,
+): FakeEngine & {
   written: EmotionalWeightWriteRow[];
   loadCalls: (string[] | undefined)[];
 } {
@@ -33,7 +37,7 @@ function makeEngine(rows: EmotionalWeightInputRow[], configMap: Record<string, s
     },
     async setEmotionalWeightBatch(rs: EmotionalWeightWriteRow[]) {
       written.push(...rs);
-      return rs.length;
+      return updatedCount ?? rs.length;
     },
     async getConfig(key: string) {
       return configMap[key] ?? null;
@@ -47,6 +51,7 @@ describe('runPhaseRecomputeEmotionalWeight', () => {
     const r = await runPhaseRecomputeEmotionalWeight(engine as any, { affectedSlugs: [] });
     expect(r.status).toBe('ok');
     expect(r.pages_recomputed).toBe(0);
+    expect(r.pages_updated).toBe(0);
     expect(engine.loadCalls.length).toBe(0); // skipped batch read
     expect(engine.written.length).toBe(0);
   });
@@ -60,6 +65,7 @@ describe('runPhaseRecomputeEmotionalWeight', () => {
     const r = await runPhaseRecomputeEmotionalWeight(engine as any, {});
     expect(r.status).toBe('ok');
     expect(r.pages_recomputed).toBe(2);
+    expect(r.pages_updated).toBe(2);
     expect(engine.written.length).toBe(2);
     // Both rows present, with weights from the formula.
     const byslug = Object.fromEntries(engine.written.map(w => [w.slug, w.weight]));
@@ -105,7 +111,21 @@ describe('runPhaseRecomputeEmotionalWeight', () => {
     expect(r.status).toBe('ok');
     expect(r.details.dry_run).toBe(true);
     expect(r.pages_recomputed).toBe(1); // would-write count
+    expect(r.pages_updated).toBe(0); // dry-run performs no writes
     expect(engine.written.length).toBe(0); // but nothing actually written
+  });
+
+  test('keeps computed cardinality separate from rows whose value changed', async () => {
+    const rows: EmotionalWeightInputRow[] = [
+      { slug: 'a', source_id: 'default', tags: [], takes: [] },
+      { slug: 'b', source_id: 'default', tags: [], takes: [] },
+    ];
+    const engine = makeEngine(rows, {}, 0);
+    const r = await runPhaseRecomputeEmotionalWeight(engine as any, {});
+    expect(r.pages_recomputed).toBe(2);
+    expect(r.pages_updated).toBe(0);
+    expect(r.details.pages_recomputed).toBe(2);
+    expect(r.details.pages_updated).toBe(0);
   });
 
   test('config override of high_emotion_tags is honored', async () => {
@@ -129,5 +149,6 @@ describe('runPhaseRecomputeEmotionalWeight', () => {
     expect(r.status).toBe('fail');
     expect(r.error?.code).toBe('RECOMPUTE_EMOTIONAL_WEIGHT_FAIL');
     expect(r.error?.message).toContain('db down');
+    expect(r.pages_updated).toBe(0);
   });
 });
