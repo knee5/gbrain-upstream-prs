@@ -6053,19 +6053,23 @@ export class PGLiteEngine implements BrainEngine {
     // Composite-keyed UPDATE FROM unnest (codex C4#3). The distinctness
     // predicate prevents no-op tuple rewrites and makes the returned count
     // mean rows whose weight actually changed. Mirror of postgres-engine.ts.
-    const gate = await this.db.query<{ source_id: string; slug: string }>(
-      `SELECT pages.source_id, pages.slug
+    const gate = await this.db.query<{
+      source_id: string;
+      slug: string;
+      needs_update: boolean;
+    }>(
+      `SELECT pages.source_id, pages.slug,
+              pages.emotional_weight IS DISTINCT FROM u.weight AS needs_update
          FROM unnest($1::text[], $2::text[], $3::real[])
            AS u(slug, source_id, weight)
          JOIN pages
            ON pages.slug = u.slug
           AND pages.source_id = u.source_id
-        WHERE pages.emotional_weight IS DISTINCT FROM u.weight
         ORDER BY pages.source_id, pages.slug
         FOR UPDATE OF pages`,
       [slugs, sourceIds, weights],
     );
-    if (gate.rows.length === 0) return 0;
+    if (!gate.rows.some(row => row.needs_update === true)) return 0;
 
     const result = await this.db.query(
       `UPDATE pages

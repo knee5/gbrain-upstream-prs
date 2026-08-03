@@ -6351,21 +6351,24 @@ export class PostgresEngine implements BrainEngine {
     // Composite-keyed UPDATE FROM unnest (codex C4#3): pages.slug is unique
     // only within a source, so a slug-only join would fan out across sources.
     //
-    // Lock every changed target in composite-key order before deciding to issue
-    // the UPDATE. Deterministic ordering prevents overlapping batches from
-    // deadlocking after each preflight locks a different first row.
+    // Lock every existing target in composite-key order before deciding to
+    // issue the UPDATE. Locking only rows that are currently different lets
+    // complementary concurrent batches lock disjoint subsets and commit a
+    // mixed result that matches neither caller. Deterministic all-target
+    // locking serializes overlapping batches while preserving the true no-op
+    // fast path below.
     const gate = await sql`
-      SELECT pages.source_id, pages.slug
+      SELECT pages.source_id, pages.slug,
+             pages.emotional_weight IS DISTINCT FROM u.weight AS needs_update
         FROM unnest(${slugs}::text[], ${sourceIds}::text[], ${weights}::real[])
           AS u(slug, source_id, weight)
         JOIN pages
           ON pages.slug = u.slug
          AND pages.source_id = u.source_id
-       WHERE pages.emotional_weight IS DISTINCT FROM u.weight
        ORDER BY pages.source_id, pages.slug
        FOR UPDATE OF pages
     `;
-    if (gate.length === 0) return 0;
+    if (!gate.some((row: Record<string, unknown>) => row.needs_update === true)) return 0;
 
     const result = await sql`
       UPDATE pages

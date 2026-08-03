@@ -185,4 +185,59 @@ describePostgres('Postgres setEmotionalWeightBatch no-op guard', () => {
       || (Math.abs(weights[0] - 0.31) < 0.00001 && Math.abs(weights[1] - 0.32) < 0.00001),
     ).toBe(true);
   });
+
+  test('complementary batches cannot commit a mixed result', async () => {
+    await engine.setEmotionalWeightBatch([
+      { slug: 'notes/emotional-noop-a', source_id: 'default', weight: 0.11 },
+      { slug: 'notes/emotional-noop-b', source_id: 'default', weight: 0.12 },
+    ]);
+
+    // Widen the interval between preflight and row mutation so the broken
+    // changed-row-only lock deterministically lets both preflights finish.
+    await engine.executeRaw(`
+      CREATE OR REPLACE FUNCTION salience_overlap_pause_fn() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER salience_overlap_pause_trg
+        BEFORE UPDATE ON pages
+        FOR EACH STATEMENT
+        EXECUTE FUNCTION salience_overlap_pause_fn()
+    `);
+
+    const left = [
+      { slug: 'notes/emotional-noop-a', source_id: 'default', weight: 0.11 },
+      { slug: 'notes/emotional-noop-b', source_id: 'default', weight: 0.22 },
+    ];
+    const right = [
+      { slug: 'notes/emotional-noop-a', source_id: 'default', weight: 0.21 },
+      { slug: 'notes/emotional-noop-b', source_id: 'default', weight: 0.12 },
+    ];
+
+    try {
+      await Promise.all([
+        engine.setEmotionalWeightBatch(left),
+        engine.setEmotionalWeightBatch(right),
+      ]);
+    } finally {
+      await engine.executeRaw(`DROP TRIGGER IF EXISTS salience_overlap_pause_trg ON pages`);
+      await engine.executeRaw(`DROP FUNCTION IF EXISTS salience_overlap_pause_fn()`);
+    }
+
+    const after = await engine.executeRaw<{ emotional_weight: number }>(
+      `SELECT emotional_weight
+         FROM pages
+        WHERE slug IN ('notes/emotional-noop-a', 'notes/emotional-noop-b')
+          AND source_id = 'default'
+        ORDER BY slug`,
+    );
+    const weights = after.map(row => Number(row.emotional_weight));
+    expect(weights).toHaveLength(2);
+    expect(
+      (Math.abs(weights[0] - 0.11) < 0.00001 && Math.abs(weights[1] - 0.22) < 0.00001)
+      || (Math.abs(weights[0] - 0.21) < 0.00001 && Math.abs(weights[1] - 0.12) < 0.00001),
+    ).toBe(true);
+  });
 });
