@@ -157,7 +157,7 @@ export function classifyCaptureFailure(err: unknown): EvalCaptureFailureReason {
 export async function captureEvalCandidate(
   engine: BrainEngine,
   ctx: CaptureContext,
-  opts: { scrub_pii?: boolean } = {},
+  opts: { scrub_pii?: boolean; config?: GBrainConfig | null } = {},
 ): Promise<void> {
   // v0.42.20.0 — track the fire-and-forget promise so the background-work
   // registry can drain it before CLI disconnect. Callers still `void` this; the
@@ -172,9 +172,10 @@ export async function captureEvalCandidate(
 async function doCaptureEvalCandidate(
   engine: BrainEngine,
   ctx: CaptureContext,
-  opts: { scrub_pii?: boolean } = {},
+  opts: { scrub_pii?: boolean; config?: GBrainConfig | null } = {},
 ): Promise<void> {
   try {
+    if (!(await resolveEvalCaptureEnabled(engine, opts.config))) return;
     const input = buildEvalCandidateInput(ctx, opts);
     await engine.logEvalCandidate(input);
   } catch (err) {
@@ -251,6 +252,36 @@ registerBackgroundWorkDrainer({
 export function isEvalCaptureEnabled(config: GBrainConfig | null | undefined): boolean {
   if (config?.eval?.capture === true) return true;
   if (config?.eval?.capture === false) return false;
+  return process.env.GBRAIN_CONTRIBUTOR_MODE === '1';
+}
+
+/**
+ * Capture enablement that also reads the db plane.
+ *
+ * `gbrain config set eval.capture true` writes the db plane. Sync
+ * `loadConfig()` and long-lived MCP `ctx.config` do not see that key, so a
+ * process that loaded file/env only would keep capture off until recycle.
+ * This helper re-reads `eval.capture` per call so a live set takes effect
+ * without a Fly or MCP restart.
+ *
+ * Order: explicit config false/true, else engine.getConfig, else
+ * CONTRIBUTOR_MODE=1.
+ */
+export async function resolveEvalCaptureEnabled(
+  engine: { getConfig(key: string): Promise<string | null | undefined> } | null | undefined,
+  config?: GBrainConfig | null,
+): Promise<boolean> {
+  if (config?.eval?.capture === false) return false;
+  if (config?.eval?.capture === true) return true;
+  if (engine) {
+    try {
+      const v = await engine.getConfig('eval.capture');
+      if (v === 'false') return false;
+      if (v === 'true') return true;
+    } catch {
+      // fall through — same fail-open-to-env as a missing key
+    }
+  }
   return process.env.GBRAIN_CONTRIBUTOR_MODE === '1';
 }
 

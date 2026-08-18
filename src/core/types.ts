@@ -966,6 +966,12 @@ export interface ResolvedColumn {
 }
 
 export interface SearchOpts {
+  /**
+   * Evaluator-safe lexical ablation. When false, skip the vector arm and
+   * stamp vector_disabled_reason='explicit_ablation'. Do not treat this as
+   * a provider failure (degraded stays empty). Default/undefined = run vector.
+   */
+  vector?: boolean;
   limit?: number;
   offset?: number;
   /**
@@ -1007,8 +1013,10 @@ export interface SearchOpts {
   exclude_slugs?: string[];
   /**
    * Slug-prefix excludes — additive over DEFAULT_HARD_EXCLUDES (test/,
-   * attachments/, .raw/) and the GBRAIN_SEARCH_EXCLUDE env var. Stacks with
-   * `exclude_slugs` (exact match) — a row is filtered if it matches either set.
+   * attachments/, .raw/), GBRAIN_SEARCH_EXCLUDE, and
+   * search.exclude_slug_prefixes. Stacks with `exclude_slugs` (exact match).
+   * Hybrid search threads the config list. Direct engine.searchKeyword
+   * callers (including search.mcp_keyword_only) only see prefixes they pass.
    * NOTE (issue #1777): `archive/` is NOT hard-excluded; it is demoted (0.5x)
    * via DEFAULT_SOURCE_BOOSTS so archived content stays findable by default.
    */
@@ -1751,6 +1759,11 @@ export interface DegradedStageEntry {
 export interface HybridSearchMeta {
   /** True iff vector search actually ran. False when OPENAI_API_KEY missing or embed failed. */
   vector_enabled: boolean;
+  /**
+   * Why vector did not run. 'explicit_ablation' is an evaluator-safe
+   * lexical-only request, not a provider failure. Omitted when vector ran.
+   */
+  vector_disabled_reason?: 'explicit_ablation' | 'no_provider' | 'embed_failed';
   /** Post-auto-detect detail level. */
   detail_resolved: 'low' | 'medium' | 'high' | null;
   /** True iff multi-query expansion (Haiku) actually fired and produced variants. */

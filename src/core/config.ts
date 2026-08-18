@@ -207,6 +207,14 @@ export interface GBrainConfig {
     /** false disables PII scrubbing before insert. Defaults to true. */
     scrub_pii?: boolean;
   };
+  /**
+   * Search-time knobs that also live on the db plane via `gbrain config set`.
+   * `exclude_slug_prefixes` is a comma list or array of slug prefixes
+   * hidden from default retrieval (unioned with DEFAULT_HARD_EXCLUDES).
+   */
+  search?: {
+    exclude_slug_prefixes?: string | string[];
+  };
 
   /**
    * v0.42 — self-upgrade settings (file plane; read on the hot path before any
@@ -854,6 +862,22 @@ export async function loadConfigWithEngine(
     merged.search_embedding_column = dbSearchEmbeddingColumn;
   }
 
+  // eval.capture / eval.scrub_pii — `gbrain config set` writes the db plane.
+  // File/env still wins per key. Long-lived MCP also re-reads capture per
+  // call via resolveEvalCaptureEnabled so a live set takes effect without recycle.
+  const dbEvalCapture = await dbBool('eval.capture');
+  const dbEvalScrub = await dbBool('eval.scrub_pii');
+  const dbSearchExcludePrefixes = await dbStr('search.exclude_slug_prefixes');
+  if (merged.eval?.capture === undefined || merged.eval?.scrub_pii === undefined) {
+    const nextEval = { ...(merged.eval ?? {}) };
+    if (nextEval.capture === undefined && dbEvalCapture !== undefined) nextEval.capture = dbEvalCapture;
+    if (nextEval.scrub_pii === undefined && dbEvalScrub !== undefined) nextEval.scrub_pii = dbEvalScrub;
+    if (Object.keys(nextEval).length > 0) merged.eval = nextEval;
+  }
+  if (merged.search?.exclude_slug_prefixes === undefined && dbSearchExcludePrefixes !== undefined) {
+    merged.search = { ...(merged.search ?? {}), exclude_slug_prefixes: dbSearchExcludePrefixes };
+  }
+
   // v0.41 content-sanity DB-plane merge (D1: lint lifts to read these
   // when reachable). Per-key sparse-merge: env/file wins per individual
   // key; DB fills the gaps. The container object is constructed only if
@@ -1054,6 +1078,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'search.image_query.max_bytes',
   'search.reranker.enabled',
   'search.track_retrieval',
+  'search.exclude_slug_prefixes',
   // Models tier system (v0.31.12)
   'models.default',
   'models.tier.utility',

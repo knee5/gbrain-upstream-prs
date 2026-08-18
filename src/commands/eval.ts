@@ -69,6 +69,10 @@ export async function runEvalCommand(engine: BrainEngine, args: string[]): Promi
     const { runEvalCodeRetrieval } = await import('./eval-code-retrieval.ts');
     return runEvalCodeRetrieval(engine, args.slice(1));
   }
+  if (sub === 'private-bench') {
+    const { runEvalPrivateBench } = await import('./eval-private-bench.ts');
+    return runEvalPrivateBench(engine, args.slice(1));
+  }
   if (sub === 'retrieval-quality') {
     // T6 — NamedThingBench. Gold query set vs hybrid retrieval; gates the
     // families that ARE the retrieval-maxpool incident (title/alias/dilution).

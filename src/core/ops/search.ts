@@ -10,7 +10,7 @@ import { hybridSearchCached, stampContentFlags, stampUnverifiedExtractions } fro
 import { looksConceptShaped } from '../search/query-intent.ts';
 import { expandQuery } from '../search/expansion.ts';
 import { dedupResults } from '../search/dedup.ts';
-import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from '../eval-capture.ts';
+import { captureEvalCandidate, isEvalScrubEnabled } from '../eval-capture.ts';
 import type { HybridSearchMeta } from '../types.ts';
 import { bumpLastRetrievedAt } from '../last-retrieved.ts';
 import { QUERY_DESCRIPTION, SEARCH_DESCRIPTION } from '../operations-descriptions.ts';
@@ -19,6 +19,7 @@ import type { Operation } from './contract.ts';
 import {
   federatedSearchScope,
   resolvePerCallMode,
+  resolvePerCallVector,
   stampEvidenceSafe,
   maybeCaptureSearch,
 } from './context.ts';
@@ -66,6 +67,7 @@ const search: Operation = {
     limit: { type: 'number', description: 'Max results (default 20)' },
     offset: { type: 'number', description: 'Skip first N results (for pagination)' },
     mode: { type: 'string', description: 'Search mode (conservative|balanced|tokenmax). Local callers only.' },
+    vector: { type: 'boolean', description: 'Local/trusted only. Pass false for an evaluator-safe lexical-only ablation (keyword/title/alias, no vector arm). Remote callers are ignored. Distinct from a missing embedding provider.' },
   },
   handler: async (ctx, p) => {
     const startedAt = Date.now();
@@ -106,12 +108,14 @@ const search: Operation = {
     // Cheap-hybrid (D4/D15): full vector+keyword+RRF+pool+title+alias, but
     // expansion OFF (no per-call LLM cost). `query` op is the full-control variant.
     let capturedMeta: HybridSearchMeta | null = null;
+    const perCallVector = resolvePerCallVector(ctx, p.vector);
     const results = await hybridSearchCached(ctx.engine, queryText, {
       limit,
       offset,
       expansion: false,
       ...scope,
       ...(perCallMode ? { mode: perCallMode } : {}),
+      ...(perCallVector === false ? { vector: false } : {}),
       onMeta: (m) => { capturedMeta = m; },
     });
     const latency_ms = Date.now() - startedAt;
@@ -144,6 +148,7 @@ const query: Operation = {
     expand: { type: 'boolean', description: 'Enable multi-query expansion (default: true)' },
     detail: { type: 'string', description: 'Result detail level: low (compiled truth only), medium (default, all with dedup), high (all chunks)' },
     mode: { type: 'string', description: 'Search mode (conservative|balanced|tokenmax). Local callers only; remote uses configured mode.' },
+    vector: { type: 'boolean', description: 'Local/trusted only. Pass false for an evaluator-safe lexical-only ablation (keyword/title/alias, no vector arm). Remote callers are ignored. Distinct from a missing embedding provider.' },
     // v0.20.0 Cathedral II Layer 10 C1/C2: language + symbol-kind filters.
     lang: { type: 'string', description: 'Filter to chunks where content_chunks.language matches (e.g., typescript, python, ruby)' },
     symbol_kind: { type: 'string', description: 'Filter to chunks where content_chunks.symbol_type matches (e.g., function, class, method, type, interface)' },
@@ -328,6 +333,7 @@ const query: Operation = {
       autocut: typeof p.autocut === 'boolean' ? (p.autocut as boolean) : undefined,
       // v0.43 — relational recall override. Omitted = smart default (mode bundle).
       relationalRetrieval: typeof p.relational === 'boolean' ? (p.relational as boolean) : undefined,
+      ...(resolvePerCallVector(ctx, p.vector) === false ? { vector: false } : {}),
     });
     const latency_ms = Date.now() - startedAt;
 
@@ -339,27 +345,25 @@ const query: Operation = {
     // what hybridSearch *actually* did so replay can distinguish "with API
     // key" from "keyword-only fallback" and "expansion fired" from
     // "expansion requested + silently fell back."
-    if (isEvalCaptureEnabled(ctx.config)) {
-      const meta: HybridSearchMeta = capturedMeta ?? {
-        vector_enabled: false, detail_resolved: detail ?? null, expansion_applied: false,
-      };
-      void captureEvalCandidate(
-        ctx.engine,
-        {
-          tool_name: 'query',
-          query: queryText,
-          results,
-          meta,
-          latency_ms,
-          remote: ctx.remote ?? false,
-          expand_enabled: expand,
-          detail: detail ?? null,
-          job_id: ctx.jobId ?? null,
-          subagent_id: ctx.subagentId ?? null,
-        },
-        { scrub_pii: isEvalScrubEnabled(ctx.config) },
-      );
-    }
+    const meta: HybridSearchMeta = capturedMeta ?? {
+      vector_enabled: false, detail_resolved: detail ?? null, expansion_applied: false,
+    };
+    void captureEvalCandidate(
+      ctx.engine,
+      {
+        tool_name: 'query',
+        query: queryText,
+        results,
+        meta,
+        latency_ms,
+        remote: ctx.remote ?? false,
+        expand_enabled: expand,
+        detail: detail ?? null,
+        job_id: ctx.jobId ?? null,
+        subagent_id: ctx.subagentId ?? null,
+      },
+      { scrub_pii: isEvalScrubEnabled(ctx.config), config: ctx.config },
+    );
 
     // WP2/D3: query never nudges toward itself — no concept hint here.
     ctx.emitResponseMeta?.('retrieval', buildRetrievalResponseMeta(queryText, results, capturedMeta));

@@ -102,6 +102,12 @@ export function parseHardExcludesEnv(env: string | undefined): string[] {
   return env.split(',').map(s => s.trim()).filter(s => s.length > 0);
 }
 
+/** Parse search.exclude_slug_prefixes from file or db (comma string or array). */
+export function parseConfigExcludePrefixes(raw: string | string[] | undefined): string[] {
+  if (Array.isArray(raw)) return raw.map(s => s.trim()).filter(s => s.length > 0);
+  return parseHardExcludesEnv(raw);
+}
+
 /**
  * Resolve the effective boost map by merging defaults with env override.
  * Env entries override defaults (shallow merge); env-only entries are added.
@@ -124,9 +130,15 @@ export function resolveHardExcludes(
   excludeOpt?: string[],
   includeOpt?: string[],
   envValue: string | undefined = process.env.GBRAIN_SEARCH_EXCLUDE,
+  configExcludes?: string[],
 ): string[] {
   const envExcludes = parseHardExcludesEnv(envValue);
-  const union = new Set<string>([...DEFAULT_HARD_EXCLUDES, ...envExcludes, ...(excludeOpt ?? [])]);
+  const union = new Set<string>([
+    ...DEFAULT_HARD_EXCLUDES,
+    ...envExcludes,
+    ...(configExcludes ?? []),
+    ...(excludeOpt ?? []),
+  ]);
   if (includeOpt?.length) {
     for (const p of includeOpt) union.delete(p);
   }

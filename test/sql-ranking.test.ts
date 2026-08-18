@@ -259,6 +259,13 @@ describe('resolveHardExcludes', () => {
     const r = resolveHardExcludes(undefined, ['envdir/'], 'envdir/');
     expect(r).not.toContain('envdir/');
   });
+
+  test('config excludes add to the union without replacing defaults', () => {
+    const r = resolveHardExcludes(undefined, undefined, undefined, ['scratch/hosted-skills-staging/']);
+    expect(r).toContain('scratch/hosted-skills-staging/');
+    expect(r).toContain('test/');
+    expect(r).not.toContain('archive/');
+  });
 });
 
 // issue #1777 — archive/ moved from hard-exclude to a 0.5 source-boost demote.

@@ -18,7 +18,7 @@ import { CJK_SLUG_CHARS, PAGE_SLUG_SEG } from '../cjk.ts';
 import { ALL_SOURCES } from '../source-id.ts';
 import { isSearchMode } from '../search/mode.ts';
 import { stampEvidence } from '../search/evidence.ts';
-import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from '../eval-capture.ts';
+import { captureEvalCandidate, isEvalScrubEnabled } from '../eval-capture.ts';
 import type { SearchResult, HybridSearchMeta } from '../types.ts';
 
 // --- Upload validators (Fix 1 / B5 / H5 / M4) ---
@@ -607,6 +607,17 @@ export function resolveCodeIntelScope(
  * mode → silently ignored (server-configured mode wins). Returns undefined to
  * mean "use the configured mode".
  */
+/**
+ * Local/trusted-only per-call vector-arm switch. Remote callers cannot
+ * force a lexical ablation (the param is ignored). Returns undefined to
+ * mean "run the configured hybrid/vector path".
+ */
+export function resolvePerCallVector(ctx: OperationContext, raw: unknown): boolean | undefined {
+  if (typeof raw !== 'boolean') return undefined;
+  if (ctx.remote !== false) return undefined;
+  return raw;
+}
+
 export function resolvePerCallMode(ctx: OperationContext, raw: unknown): string | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
   if (ctx.remote !== false) return undefined; // remote can't select mode
@@ -634,7 +645,6 @@ export function maybeCaptureSearch(
   vectorEnabled: boolean,
   meta?: HybridSearchMeta | null,
 ): void {
-  if (!isEvalCaptureEnabled(ctx.config)) return;
   void captureEvalCandidate(
     ctx.engine,
     {
@@ -649,6 +659,6 @@ export function maybeCaptureSearch(
       job_id: ctx.jobId ?? null,
       subagent_id: ctx.subagentId ?? null,
     },
-    { scrub_pii: isEvalScrubEnabled(ctx.config) },
+    { scrub_pii: isEvalScrubEnabled(ctx.config), config: ctx.config },
   );
 }

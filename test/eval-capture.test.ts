@@ -15,6 +15,7 @@ import {
   classifyCaptureFailure,
   isEvalCaptureEnabled,
   isEvalScrubEnabled,
+  resolveEvalCaptureEnabled,
   type CaptureContext,
 } from '../src/core/eval-capture.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
@@ -164,6 +165,7 @@ describe('classifyCaptureFailure', () => {
 describe('captureEvalCandidate — best-effort failure handling', () => {
   function makeMockEngine(overrides: Partial<BrainEngine> = {}): BrainEngine {
     return {
+      getConfig: mock(async (key: string) => (key === 'eval.capture' ? 'true' : null)),
       logEvalCandidate: mock(() => Promise.resolve(1)),
       logEvalCaptureFailure: mock(() => Promise.resolve()),
       ...overrides,
@@ -252,6 +254,22 @@ describe('isEvalCaptureEnabled / isEvalScrubEnabled (CONTRIBUTOR_MODE-gated)', (
     process.env.GBRAIN_CONTRIBUTOR_MODE = '';
     try {
       expect(isEvalCaptureEnabled(null)).toBe(false);
+    } finally { restore(); }
+  });
+
+  test('resolveEvalCaptureEnabled reads db-plane true when config is unset', async () => {
+    delete process.env.GBRAIN_CONTRIBUTOR_MODE;
+    try {
+      const engine = { async getConfig(key: string) { return key === 'eval.capture' ? 'true' : null; } };
+      expect(await resolveEvalCaptureEnabled(engine, { engine: 'pglite' })).toBe(true);
+    } finally { restore(); }
+  });
+
+  test('resolveEvalCaptureEnabled explicit config false wins over db true and CONTRIBUTOR_MODE', async () => {
+    process.env.GBRAIN_CONTRIBUTOR_MODE = '1';
+    try {
+      const engine = { async getConfig() { return 'true'; } };
+      expect(await resolveEvalCaptureEnabled(engine, { engine: 'pglite', eval: { capture: false } })).toBe(false);
     } finally { restore(); }
   });
 

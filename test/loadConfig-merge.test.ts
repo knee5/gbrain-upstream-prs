@@ -331,4 +331,29 @@ describe('loadConfigWithEngine (Phase 4 / F3)', () => {
       expect(merged?.engine).toBe('pglite');
     });
   });
+
+  test('DB-plane eval.capture true fills when file/env is unset', async () => {
+    const merged = await loadConfigWithEngine(
+      makeEngine({ 'eval.capture': 'true', 'eval.scrub_pii': 'true' }),
+      { engine: 'pglite' },
+    );
+    expect(merged?.eval?.capture).toBe(true);
+    expect(merged?.eval?.scrub_pii).toBe(true);
+  });
+
+  test('file-plane eval.capture false wins over db true', async () => {
+    const merged = await loadConfigWithEngine(
+      makeEngine({ 'eval.capture': 'true' }),
+      { engine: 'pglite', eval: { capture: false } },
+    );
+    expect(merged?.eval?.capture).toBe(false);
+  });
+
+  test('DB-plane search.exclude_slug_prefixes fills when unset', async () => {
+    const merged = await loadConfigWithEngine(
+      makeEngine({ 'search.exclude_slug_prefixes': 'scratch/hosted-skills-staging/' }),
+      { engine: 'pglite' },
+    );
+    expect(merged?.search?.exclude_slug_prefixes).toBe('scratch/hosted-skills-staging/');
+  });
 });

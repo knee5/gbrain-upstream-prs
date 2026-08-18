@@ -22,7 +22,7 @@ import type {
 import { embed, embedQuery } from '../embedding.ts';
 import { registerBackgroundWorkDrainer } from '../background-work.ts';
 import { resolveEmbeddingColumn, isCacheSafe } from './embedding-column.ts';
-import { resolveHardExcludes } from './source-boost.ts';
+import { parseConfigExcludePrefixes, resolveHardExcludes } from './source-boost.ts';
 import {
   resolveAdaptiveReturn,
   applyAdaptiveReturn,
@@ -1037,6 +1037,7 @@ export async function hybridSearch(
   // misses DB-plane overrides.
   const mergedCfg = await loadConfigWithEngine(engine).catch(() => null);
   const cfgForColumn = mergedCfg ?? ((await import('../config.ts')).loadConfig()) ?? null;
+  const configExcludes = parseConfigExcludePrefixes(cfgForColumn?.search?.exclude_slug_prefixes);
   const resolvedCol = cfgForColumn
     ? resolveEmbeddingColumn(opts, cfgForColumn)
     : resolveEmbeddingColumn(opts, { engine: 'pglite' });
@@ -1087,6 +1088,8 @@ export async function hybridSearch(
     // ordering means we can't lazy-spread the full opts).
     sourceId: opts?.sourceId,
     sourceIds: opts?.sourceIds,
+    exclude_slug_prefixes: [...configExcludes, ...(opts?.exclude_slug_prefixes ?? [])],
+    include_slug_prefixes: opts?.include_slug_prefixes,
     // v0.36 (D11): pass the pre-validated descriptor into the engine so
     // it never has to read config. Engines normalize string-or-descriptor
     // via normalizeEngineColumn; the descriptor path is the strict one.
@@ -1259,6 +1262,51 @@ export async function hybridSearch(
       limit: opts?.limit ?? resolvedMode.searchLimit,
       onMeta: opts?.onRelationalMeta,
     });
+  }
+
+  // Evaluator-safe lexical ablation: skip the vector arm without treating
+  // it as a provider failure. Remote callers cannot set SearchOpts.vector
+  // (the op layer ignores the param when ctx.remote !== false).
+  if (opts?.vector === false) {
+    await stampUnverifiedExtractions(engine, [...keywordResults, ...titleResults, ...relationalList]);
+    let lexicalResults = keywordResults;
+    if (relationalList.length > 0 || titleResults.length > 0) {
+      const fk = opts?.rrfK ?? RRF_K;
+      const lexicalLists = [{ list: keywordResults, k: fk }];
+      if (titleResults.length > 0) lexicalLists.push({ list: titleResults, k: fk });
+      if (relationalList.length > 0) lexicalLists.push({ list: relationalList, k: fk });
+      lexicalResults = rrfFusionWeighted(lexicalLists, shouldBoostCompiledTruth(detailResolved));
+    }
+    if (lexicalResults.length > 0) {
+      await runPostFusionStages(engine, lexicalResults, postFusionOpts);
+      lexicalResults.sort((a, b) => b.score - a.score);
+    }
+    const lexicalHopped = await applyAliasHop(engine, dedupResults(lexicalResults), query, {
+      sourceId: opts?.sourceId,
+      sourceIds: opts?.sourceIds,
+    });
+    stampEvidence(lexicalHopped, { cosineFloor: resolvedMode.evidence_cosine_floor });
+    const lexicalSliced = lexicalHopped.slice(offset, offset + limit);
+    const { results: lexicalBudgeted, meta: lexicalBudgetMeta } = enforceTokenBudget(lexicalSliced, resolvedMode.tokenBudget);
+    await stampContentFlags(engine, lexicalBudgeted);
+    lastResultsCount = lexicalBudgeted.length;
+    lastRank1Score = lexicalBudgeted[0] ? (lexicalBudgeted[0].base_score ?? lexicalBudgeted[0].score) : undefined;
+    stampBudgetStage(degraded, lexicalBudgetMeta);
+    emitMeta({
+      vector_enabled: false,
+      vector_disabled_reason: 'explicit_ablation',
+      detail_resolved: detailResolved,
+      expansion_applied: false,
+      intent: suggestions.intent,
+      mode: resolvedMode.resolved_mode,
+      embedding_column: resolvedCol.name,
+      degraded: [...degraded],
+      retrieved_count: lexicalSliced.length,
+      ...(resolvedMode.tokenBudget && resolvedMode.tokenBudget > 0
+        ? { token_budget: lexicalBudgetMeta }
+        : {}),
+    });
+    return lexicalBudgeted;
   }
 
   // Skip vector search entirely if the gateway has no embedding provider configured (Codex C3).
@@ -2042,7 +2090,12 @@ export async function hybridSearchCached(
     // include_slug_prefixes — exactly what the engines' query-build path
     // resolves) into the cache key so a row written under one exclude
     // policy can't be served to a lookup under another.
-    hardExcludes: resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes),
+    hardExcludes: resolveHardExcludes(
+      opts?.exclude_slug_prefixes,
+      opts?.include_slug_prefixes,
+      process.env.GBRAIN_SEARCH_EXCLUDE,
+      parseConfigExcludePrefixes(cfgCached.search?.exclude_slug_prefixes),
+    ),
     // #3515 — fold the EFFECTIVE detail level into the cache key. detail
     // gates dedup, chunk-source filtering, and the compiled_truth boost, so
     // a `--detail low` write (compiled-truth-only result set) must never be
@@ -2088,7 +2141,8 @@ export async function hybridSearchCached(
     Boolean(opts?.nearSymbol) ||
     isNonDefaultColumn ||
     adaptiveReturnOn ||
-    dateFiltered;
+    dateFiltered ||
+    opts?.vector === false;
 
   let cacheStatus: 'hit' | 'miss' | 'disabled' = skipCache ? 'disabled' : 'miss';
   let cacheSimilarity: number | undefined;
