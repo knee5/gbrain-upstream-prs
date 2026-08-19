@@ -144,3 +144,28 @@ export function resolveHardExcludes(
   }
   return Array.from(union);
 }
+
+/**
+ * Engine-path exclude resolver. Reads `search.exclude_slug_prefixes` from
+ * the db plane (memoized via ConfigSnapshot on getConfig) so keyword,
+ * title, chunk, and vector arms honor the same swamp list as hybrid.
+ * getConfig throw (pre-config table) fails open to env+defaults.
+ */
+export async function resolveHardExcludesFromEngine(
+  engine: { getConfig(key: string): Promise<string | null | undefined> },
+  opts?: { exclude_slug_prefixes?: string[]; include_slug_prefixes?: string[] },
+): Promise<string[]> {
+  let configExcludes: string[] | undefined;
+  try {
+    const raw = await engine.getConfig('search.exclude_slug_prefixes');
+    if (raw) configExcludes = parseConfigExcludePrefixes(raw);
+  } catch {
+    // missing config table / mid-migration — same fail-open as loadConfigWithEngine
+  }
+  return resolveHardExcludes(
+    opts?.exclude_slug_prefixes,
+    opts?.include_slug_prefixes,
+    process.env.GBRAIN_SEARCH_EXCLUDE,
+    configExcludes,
+  );
+}

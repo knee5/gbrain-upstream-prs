@@ -35,4 +35,35 @@ describe('eval private-bench fail-closed', () => {
     }
     expect(code).toBe(1);
   });
+
+  test('exits 1 when reviewed count is below 100', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'private-bench-'));
+    const path = join(dir, 'qrels.json');
+    writeFileSync(path, JSON.stringify({
+      schema_version: 1,
+      benchmark_id: 't',
+      privacy_class: 'private_local_only',
+      split_seed: 's',
+      queries: [{
+        query_id: 'q_bbbbbbbbbbbbbbbb',
+        query: 'x',
+        source_id: 'default',
+        split: 'development',
+        label_status: 'reviewed',
+        privacy_reviewed: true,
+        relevant: [{ source_id: 'default', slug: 'ops/decisions' }],
+      }],
+    }));
+    const exit = process.exit;
+    let code: number | undefined;
+    process.exit = ((c?: number) => { code = c; throw new Error(`exit ${c}`); }) as typeof process.exit;
+    try {
+      await runEvalPrivateBench({} as never, ['--qrels', path]);
+    } catch {
+      // expected
+    } finally {
+      process.exit = exit;
+    }
+    expect(code).toBe(1);
+  });
 });

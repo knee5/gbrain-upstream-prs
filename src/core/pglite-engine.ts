@@ -91,7 +91,8 @@ import { executeRawJsonb, type SqlValue } from './sql-query.ts';
 import { sanitizeForJsonb, buildLinkRows, buildTimelineRows } from './batch-rows.ts';
 import { PAGE_SORT_SQL, MIN_ENTITY_PAGES_FOR_COVERAGE } from './types.ts';
 import { finalizeLastSeen } from './chronicle/last-seen.ts';
-import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
+import { resolveBoostMap, resolveHardExcludesFromEngine } from './search/source-boost.ts';
+import { ConfigSnapshot } from './config-snapshot.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
 import { unverifiedExtractionFragment } from './extraction-review.ts';
 import { shouldExcludeFromOrphanReporting, loadOrphanPolicyOverrides } from './orphan-policy.ts';
@@ -698,6 +699,18 @@ export class PGLiteEngine implements BrainEngine {
    * Test seam + programmatic callers can surface the receipt.
    */
   walRepairReceipt: WalRepairReceipt | null = null;
+  /**
+   * 5s memo of `SELECT key, value FROM config`. Hybrid search +
+   * loadConfigWithEngine used to issue ~30 sequential getConfig round-trips
+   * per call; those now share one snapshot. Invalidated on set/unset.
+   */
+  private readonly configSnapshot = new ConfigSnapshot(() => this.loadConfigRows());
+
+  /** Raw SQL that mutates `config` must drop the 5s memo. Tests and
+   *  migrations write the table without setConfig. */
+  private invalidateConfigSnapshotIfTouched(sql: string): void {
+    if (/\bconfig\b/i.test(sql)) this.configSnapshot.invalidate();
+  }
 
   get db(): PGLiteDB {
     if (!this._db) throw new Error('PGLite not connected. Call connect() first.');
@@ -1576,8 +1589,10 @@ export class PGLiteEngine implements BrainEngine {
     // PGLite has no connection pool. The single backing connection is
     // always effectively reserved — pass it through.
     const db = this.db;
+    const invalidateConfig = (sql: string) => this.invalidateConfigSnapshotIfTouched(sql);
     const conn: ReservedConnection = {
       async executeRaw<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<R[]> {
+        invalidateConfig(sql);
         const { rows } = await db.query(sql, params);
         return rows as R[];
       },
@@ -2243,7 +2258,7 @@ export class PGLiteEngine implements BrainEngine {
     // Source-aware ranking (v0.22): see postgres-engine.ts for rationale.
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
 
     // v0.26.5: visibility filter (soft-deleted + archived-source).
@@ -2381,7 +2396,7 @@ export class PGLiteEngine implements BrainEngine {
 
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
     const visibilityClause = buildVisibilityClause('p', 's');
     // FTS config name (e.g. 'english', 'pt_br'). Validated by getFtsLanguage()
@@ -2630,7 +2645,7 @@ export class PGLiteEngine implements BrainEngine {
     // chunk-grain anchor primitive that two-pass retrieval (Layer 7) uses.
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
     const visibilityClause = buildVisibilityClause('p', 's');
 
@@ -2733,7 +2748,7 @@ export class PGLiteEngine implements BrainEngine {
     // hnsw_candidates (parity with postgres-engine) so unverified stubs get
     // factor 1.0, not the people/ 1.2x, inside the pre-LIMIT re-rank.
     const sourceFactorCaseOnSlug = buildSourceFactorCase('slug', boostMap, opts?.detail, 'unverified_stub');
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
     // v0.46.15 (retrieval-cathedral P1): bounded escalation — see
     // postgres-engine.ts searchVector for the full rationale; the logic here
@@ -5607,40 +5622,44 @@ export class PGLiteEngine implements BrainEngine {
     );
   }
 
-  // Config
+  // Config — 5s snapshot of the whole table. set/unset bump generation
+  // before and after the write so an in-flight load cannot land stale rows.
+  private async loadConfigRows(): Promise<Array<{ key: string; value: string }>> {
+    const { rows } = await this.db.query('SELECT key, value FROM config');
+    return (rows as { key: string; value: string }[]).map(r => ({ key: r.key, value: r.value }));
+  }
+
   async getConfig(key: string): Promise<string | null> {
-    const { rows } = await this.db.query('SELECT value FROM config WHERE key = $1', [key]);
-    return rows.length > 0 ? (rows[0] as { value: string }).value : null;
+    return this.configSnapshot.get(key);
   }
 
   async setConfig(key: string, value: string): Promise<void> {
+    this.configSnapshot.invalidate();
     await this.db.query(
       `INSERT INTO config (key, value) VALUES ($1, $2)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [key, value]
     );
+    this.configSnapshot.invalidate();
   }
 
   async unsetConfig(key: string): Promise<number> {
+    this.configSnapshot.invalidate();
     const { affectedRows } = await this.db.query(
       'DELETE FROM config WHERE key = $1',
       [key],
     ) as { affectedRows?: number };
+    this.configSnapshot.invalidate();
     return affectedRows ?? 0;
   }
 
   async listConfigKeys(prefix: string): Promise<string[]> {
-    // LIKE-escape the prefix so a user-supplied % or _ doesn't act as a wildcard.
-    const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const { rows } = await this.db.query(
-      `SELECT key FROM config WHERE key LIKE $1 || '%' ESCAPE '\\' ORDER BY key`,
-      [escaped],
-    );
-    return (rows as { key: string }[]).map(r => r.key);
+    return this.configSnapshot.keysWithPrefix(prefix);
   }
 
   // Migration support
   async runMigration(_version: number, sql: string): Promise<void> {
+    this.invalidateConfigSnapshotIfTouched(sql);
     await this.db.exec(sql);
   }
 
@@ -5669,6 +5688,7 @@ export class PGLiteEngine implements BrainEngine {
     params?: unknown[],
     opts?: { signal?: AbortSignal },
   ): Promise<T[]> {
+    this.invalidateConfigSnapshotIfTouched(sql);
     // v0.41.18.0 (A20, codex #7): PGLite is in-process WASM with no
     // kernel-level cancellation. Best-effort: pre-check the signal so
     // an already-aborted call returns immediately, and race against

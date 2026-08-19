@@ -17,7 +17,7 @@ import {
 // default search by the hard-exclude prefix policy. Reuses the canonical
 // exclude resolver + LIKE escaper + visibility clause so the doctor count can't
 // drift from what search actually filters.
-import { resolveHardExcludes, DEFAULT_HARD_EXCLUDES } from '../../../core/search/source-boost.ts';
+import { resolveHardExcludesFromEngine, DEFAULT_HARD_EXCLUDES } from '../../../core/search/source-boost.ts';
 import { escapeLikePattern, buildVisibilityClause } from '../../../core/search/sql-ranking.ts';
 import type { Check } from '../../doctor.ts';
 
@@ -142,7 +142,7 @@ export async function checkContextualRetrievalCoverage(engine: BrainEngine): Pro
 export async function checkHiddenBySearchPolicy(engine: BrainEngine): Promise<Check> {
   const name = 'hidden_by_search_policy';
   try {
-    const prefixes = resolveHardExcludes();
+    const prefixes = await resolveHardExcludesFromEngine(engine);
     if (prefixes.length === 0) {
       return { name, status: 'ok', message: 'No search-exclude prefixes active.' };
     }

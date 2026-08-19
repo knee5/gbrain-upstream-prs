@@ -60,6 +60,24 @@ Hybrid search applies a source-factor CASE expression at the SQL layer (lives in
 
 The boost map is configurable via `GBRAIN_SOURCE_BOOST` env var or per-call `SearchOpts.exclude_slug_prefixes`. Temporal queries (`detail: 'high'`) bypass the boost so chat pages re-surface for time-sensitive lookups.
 
+Operator swamp prefixes (for example a staged skill-library tree that should
+never enter retrieval) go in `search.exclude_slug_prefixes` via
+`gbrain config set search.exclude_slug_prefixes 'scratch/hosted-skills-staging/'`.
+That list unions with `DEFAULT_HARD_EXCLUDES` (`test/`, `attachments/`,
+`.raw/`) and `GBRAIN_SEARCH_EXCLUDE`. It is **not** baked into the
+defaults. Hybrid search, the four engine arms (`searchKeyword`,
+`searchTitles`, `searchKeywordChunks`, `searchVector` on both engines),
+and `search.mcp_keyword_only` all honor it. `include_slug_prefixes` opts
+a prefix back in per call. `gbrain doctor`'s `hidden_by_search_policy`
+counts pages hidden by the same resolved list.
+
+Lexical ablation (evaluator-safe, not a missing provider): local/trusted
+callers pass `vector=false` on `search`/`query`. Hybrid then runs
+keyword + title + relational + RRF + alias-hop with
+`vector_disabled_reason: 'explicit_ablation'` and skips the query cache
+so a lexical arm cannot read or write a hybrid cache row. Remote callers
+cannot set this flag.
+
 ## Named-thing retrieval (per-page pool + title + alias + evidence)
 
 A brain organized around *chosen names* (project codenames, place nicknames —

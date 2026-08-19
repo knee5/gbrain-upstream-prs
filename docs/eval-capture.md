@@ -131,7 +131,7 @@ earlier drafts). Two paths to turn it on:
 export GBRAIN_CONTRIBUTOR_MODE=1     # in ~/.zshrc or ~/.bashrc
 ```
 
-**Path B — explicit config (`~/.gbrain/config.json`, file-plane only):**
+**Path B — explicit config (file plane `~/.gbrain/config.json`, or DB plane `gbrain config set eval.capture true`):**
 
 ```json
 {
@@ -146,15 +146,21 @@ export GBRAIN_CONTRIBUTOR_MODE=1     # in ~/.zshrc or ~/.bashrc
 
 Resolution order (most explicit wins):
 
-1. `eval.capture: true` in config → on
-2. `eval.capture: false` in config → off (overrides CONTRIBUTOR_MODE=1)
-3. `GBRAIN_CONTRIBUTOR_MODE === '1'` → on
-4. otherwise → off
+1. Explicit `eval.capture: false` in the already-loaded file/env config → off
+2. Explicit `eval.capture: true` in the already-loaded file/env config → on
+3. DB-plane `gbrain config set eval.capture true|false` (via
+   `engine.getConfig('eval.capture')`, memoized by a 5s config snapshot)
+   → on/off
+4. `GBRAIN_CONTRIBUTOR_MODE === '1'` → on
+5. otherwise → off
 
 `scrub_pii` defaults to `true` independent of capture. Set
 `eval.scrub_pii: false` to preserve raw query text (only if you control
-the brain's distribution).
+the brain's distribution). File/env still wins over the DB plane per
+key when `loadConfigWithEngine` merges.
 
-`gbrain config set eval.capture false` does **not** work — that
-command writes the DB-plane config, and the MCP server reads the
-file-plane. Edit the JSON directly or use the env var.
+`gbrain config set eval.capture true` **does** take effect on a live
+process. Capture re-reads the DB plane per call
+(`resolveEvalCaptureEnabled`) so a Fly or MCP recycle is not required.
+The same merge path lifts `eval.scrub_pii` and
+`search.exclude_slug_prefixes`.

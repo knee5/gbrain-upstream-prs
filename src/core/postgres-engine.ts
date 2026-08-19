@@ -80,7 +80,8 @@ import { ConnectionManager, DEFAULT_DIRECT_POOL_SIZE } from './connection-manage
 import { logConnectionEvent } from './connection-audit.ts';
 import { drainBackgroundWorkBeforeDisconnect } from './background-work.ts';
 import { validateSlug, contentHash, rowToPage, rowToStalePage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, isUndefinedTableError, warnOncePerProcess } from './utils.ts';
-import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
+import { resolveBoostMap, resolveHardExcludesFromEngine } from './search/source-boost.ts';
+import { ConfigSnapshot } from './config-snapshot.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
 import { unverifiedExtractionFragment } from './extraction-review.ts';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
@@ -142,6 +143,18 @@ export class PostgresEngine implements BrainEngine {
    * via the prototype chain (same process, same pools). Fail-open.
    */
   private checkoutGauge = new CheckoutGauge();
+  /**
+   * 5s memo of `SELECT key, value FROM config`. Hybrid search +
+   * loadConfigWithEngine used to issue ~30 sequential getConfig round-trips
+   * per call; those now share one snapshot. Invalidated on set/unset.
+   */
+  private readonly configSnapshot = new ConfigSnapshot(() => this.loadConfigRows());
+
+  /** Raw SQL that mutates `config` must drop the 5s memo. Tests and
+   *  migrations write the table without setConfig. */
+  private invalidateConfigSnapshotIfTouched(sql: string): void {
+    if (/\bconfig\b/i.test(sql)) this.configSnapshot.invalidate();
+  }
   /**
    * #1471: module-singleton OWNERSHIP token. `true` only for the engine whose
    * connect() actually created the shared db.ts `sql` singleton (returned
@@ -1158,6 +1171,7 @@ export class PostgresEngine implements BrainEngine {
       throw e;
     }
     try {
+      const invalidateConfig = (sql: string) => this.invalidateConfigSnapshotIfTouched(sql);
       const conn: ReservedConnection = {
         async executeRaw<R = Record<string, unknown>>(
           query: string,
@@ -1169,6 +1183,7 @@ export class PostgresEngine implements BrainEngine {
           // want cancellation). Signature matches the interface so callers
           // that pass opts don't typecheck-break; opts.signal is ignored.
           void opts;
+          invalidateConfig(query);
           const rows = params === undefined
             ? await reserved.unsafe(query)
             : await reserved.unsafe(query, params as Parameters<typeof reserved.unsafe>[1]);
@@ -1893,7 +1908,7 @@ export class PostgresEngine implements BrainEngine {
     // excluded — issue #1777.)
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
 
     const params: unknown[] = [query];
@@ -2067,7 +2082,7 @@ export class PostgresEngine implements BrainEngine {
 
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
     const visibilityClause = buildVisibilityClause('p', 's');
     // FTS config name (e.g. 'english', 'pt_br'). Validated by getFtsLanguage()
@@ -2207,7 +2222,7 @@ export class PostgresEngine implements BrainEngine {
     // detail-gate, same hard-exclude behavior as searchKeyword.
     const boostMap = resolveBoostMap();
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
 
     const params: unknown[] = [query];
@@ -2340,7 +2355,7 @@ export class PostgresEngine implements BrainEngine {
     // hnsw_candidates (frontmatter isn't otherwise available at re-rank), so
     // unverified auto-extracted stubs get factor 1.0, not the people/ 1.2x.
     const sourceFactorCaseOnSlug = buildSourceFactorCase('slug', boostMap, opts?.detail, 'unverified_stub');
-    const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
+    const hardExcludePrefixes = await resolveHardExcludesFromEngine(this, opts);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
     // v0.36 (D11): column routing via resolved descriptor. Engine doesn't
     // read config — caller (hybrid/op) resolved it and passed it in.
@@ -5401,47 +5416,48 @@ export class PostgresEngine implements BrainEngine {
     });
   }
 
-  async getConfig(key: string): Promise<string | null> {
+  private async loadConfigRows(): Promise<Array<{ key: string; value: string }>> {
     // #1603: a transient pooler drop on this read used to throw / fall through
     // to defaults silently — which on remote Postgres surfaces as the wrong
     // search mode/knobs and empty-stdout queries.
     return this.connRetry(async () => {
-      const rows = await this.sql`SELECT value FROM config WHERE key = ${key}`;
-      return rows.length > 0 ? (rows[0].value as string) : null;
+      const rows = await this.sql<{ key: string; value: string }[]>`SELECT key, value FROM config`;
+      return rows.map(r => ({ key: r.key, value: r.value }));
     });
   }
 
+  async getConfig(key: string): Promise<string | null> {
+    return this.configSnapshot.get(key);
+  }
+
   async setConfig(key: string, value: string): Promise<void> {
-    return this.connRetry(async () => {
+    this.configSnapshot.invalidate();
+    await this.connRetry(async () => {
       await this.sql`
         INSERT INTO config (key, value) VALUES (${key}, ${value})
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
       `;
     });
+    this.configSnapshot.invalidate();
   }
 
   async unsetConfig(key: string): Promise<number> {
-    return this.connRetry(async () => {
+    this.configSnapshot.invalidate();
+    const n = await this.connRetry(async () => {
       const result = await this.sql`DELETE FROM config WHERE key = ${key}` as unknown as { count: number };
       return result.count ?? 0;
     });
+    this.configSnapshot.invalidate();
+    return n;
   }
 
   async listConfigKeys(prefix: string): Promise<string[]> {
-    // LIKE-escape literal % and _ so a config key with those chars resolves
-    // correctly. Pure string work — stays outside the retried thunk.
-    const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const pattern = `${escaped}%`;
-    return this.connRetry(async () => {
-      const rows = await this.sql<{ key: string }[]>`
-        SELECT key FROM config WHERE key LIKE ${pattern} ESCAPE '\\' ORDER BY key
-      `;
-      return rows.map(r => r.key);
-    });
+    return this.configSnapshot.keysWithPrefix(prefix);
   }
 
   // Migration support
   async runMigration(_version: number, sqlStr: string): Promise<void> {
+    this.invalidateConfigSnapshotIfTouched(sqlStr);
     const conn = this.sql;
     await conn.unsafe(sqlStr);
   }
@@ -5608,6 +5624,7 @@ export class PostgresEngine implements BrainEngine {
     params?: unknown[],
     opts?: { signal?: AbortSignal },
   ): Promise<T[]> {
+    this.invalidateConfigSnapshotIfTouched(sql);
     // try/finally (not .finally on the promise): runUnsafe throws
     // SYNCHRONOUSLY on a pre-aborted signal, which would skip a chained
     // .finally and leak the counter.
@@ -5646,6 +5663,7 @@ export class PostgresEngine implements BrainEngine {
     params?: unknown[],
     opts?: { signal?: AbortSignal },
   ): Promise<T[]> {
+    this.invalidateConfigSnapshotIfTouched(sql);
     // #4145 R2-2: observe the signal BEFORE (potentially slow) direct-pool
     // acquisition — a caller whose timeout already fired must not queue for
     // a pool slot just to be cancelled afterwards. runUnsafe re-checks after

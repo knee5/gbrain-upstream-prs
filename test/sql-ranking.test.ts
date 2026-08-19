@@ -266,6 +266,27 @@ describe('resolveHardExcludes', () => {
     expect(r).toContain('test/');
     expect(r).not.toContain('archive/');
   });
+
+  test('resolveHardExcludesFromEngine reads search.exclude_slug_prefixes via getConfig', async () => {
+    const { resolveHardExcludesFromEngine } = await import('../src/core/search/source-boost.ts');
+    const engine = {
+      async getConfig(key: string) {
+        return key === 'search.exclude_slug_prefixes' ? 'scratch/hosted-skills-staging/' : null;
+      },
+    };
+    const r = await resolveHardExcludesFromEngine(engine);
+    expect(r).toContain('scratch/hosted-skills-staging/');
+    expect(r).toContain('test/');
+  });
+
+  test('resolveHardExcludesFromEngine fails open when getConfig throws', async () => {
+    const { resolveHardExcludesFromEngine } = await import('../src/core/search/source-boost.ts');
+    const r = await resolveHardExcludesFromEngine({
+      async getConfig() { throw new Error('no table'); },
+    });
+    expect(r).toContain('test/');
+    expect(r).not.toContain('scratch/hosted-skills-staging/');
+  });
 });
 
 // issue #1777 — archive/ moved from hard-exclude to a 0.5 source-boost demote.

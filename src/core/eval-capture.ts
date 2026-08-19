@@ -264,8 +264,8 @@ export function isEvalCaptureEnabled(config: GBrainConfig | null | undefined): b
  * This helper re-reads `eval.capture` per call so a live set takes effect
  * without a Fly or MCP restart.
  *
- * Order: explicit config false/true, else engine.getConfig, else
- * CONTRIBUTOR_MODE=1.
+ * Order: explicit config false/true, else engine.getConfig (5s config
+ * snapshot), else CONTRIBUTOR_MODE=1.
  */
 export async function resolveEvalCaptureEnabled(
   engine: { getConfig(key: string): Promise<string | null | undefined> } | null | undefined,
