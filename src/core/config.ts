@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, renameSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
@@ -1130,6 +1130,12 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // for busy deployments).
   'dream.synthesize.max_turns',
   'dream.synthesize.max_submissions_per_source_per_day',
+  // #4216/#4194 dream-wave knobs: synthesis execution mode ('oneshot'
+  // default | 'agentic'), pre-retrieval link-candidate manifest (default on),
+  // and inline-drain concurrency (default 1; clamped [1,8]; PGLite forced 1).
+  'dream.synthesize.mode',
+  'dream.synthesize.link_manifest',
+  'dream.synthesize.inline_concurrency',
   // #4152 triage knobs. The triage model's preferred key is
   // `models.dream.triage` (models.* prefix, registered via the models.dream.*
   // family); these tune the gate + sampling + pass budget.
@@ -1289,7 +1295,13 @@ export function isConfigTruthy(raw: unknown): boolean {
 
 export function saveConfig(config: GBrainConfig): void {
   mkdirSync(getConfigDir(), { recursive: true });
-  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+  // Atomic write (tmp + rename): long-lived workers re-read this file per job
+  // (gateway env refresh, keyed/keyless classification) — a truncate-then-write
+  // here could be read torn, making a keyed install classify as keyless and
+  // calmly consume work it should retry.
+  const tmp = `${getConfigPath()}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+  renameSync(tmp, getConfigPath());
   try {
     chmodSync(getConfigPath(), 0o600);
   } catch {
