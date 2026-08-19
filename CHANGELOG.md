@@ -2,6 +2,49 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.46.23.0] - 2026-08-19
+
+**You can now run a three-arm retrieval bench, turn capture on from the
+DB plane without a recycle, and hide swamp prefixes with a config key.**
+Local callers can also force a lexical-only search (`vector=false`) that
+is distinct from a missing embedding provider.
+
+### Added
+
+- **`gbrain eval private-bench --qrels`** — fail-closed three-arm bench
+  (lexical / hybrid / semantic). Refuses unlabeled rows and fewer than
+  100 reviewed queries. Reuses `parseQrelsFile` and the metric glossary.
+  Writes `.gbrain-evals/eval-results.jsonl`. Does not manufacture qrels.
+- **Lexical ablation** — local/trusted `search`/`query` accept
+  `vector=false`. Hybrid then runs keyword + title + relational + RRF +
+  alias-hop with `vector_disabled_reason: 'explicit_ablation'` and skips
+  the query cache so a lexical arm cannot read a hybrid cache row. Remote
+  callers cannot set this flag.
+- **`search.exclude_slug_prefixes`** — operator swamp list, not baked
+  into `DEFAULT_HARD_EXCLUDES`. Hybrid search, all four engine search
+  arms, `search.mcp_keyword_only`, and `hidden_by_search_policy` honor
+  it. Example: `gbrain config set search.exclude_slug_prefixes 'scratch/hosted-skills-staging/'`.
+
+### Fixed
+
+- **`gbrain config set eval.capture true` now takes effect live.** Capture
+  re-reads the DB plane per call (`resolveEvalCaptureEnabled`).
+  `loadConfigWithEngine` merges `eval.capture`, `eval.scrub_pii`, and
+  `search.exclude_slug_prefixes`. A Fly or MCP recycle is not required.
+- **Config reads no longer issue ~30 sequential `getConfig` round-trips
+  per search.** Both engines memoize `SELECT key, value FROM config` for
+  5 seconds and drop the memo on `setConfig`, `unsetConfig`, and any
+  `executeRaw` that touches the `config` table.
+
+### To take advantage of v0.46.23.0
+
+- Turn capture on without a restart: `gbrain config set eval.capture true`.
+- Hide a swamp prefix: `gbrain config set search.exclude_slug_prefixes 'scratch/hosted-skills-staging/'`.
+- Run a lexical arm: `gbrain search --vector false "<query>"` (local only).
+- Score a sealed private qrel file: `gbrain eval private-bench --qrels <file.json>`.
+  The file must have at least 100 privacy-reviewed labeled queries. Do not
+  invent labels from retrieved slugs.
+
 ## [0.46.22.0] - 2026-08-18
 
 **A wedged database shutdown can now die fast and loud instead of hanging
