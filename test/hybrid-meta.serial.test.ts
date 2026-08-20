@@ -59,6 +59,15 @@ describe('hybridSearch onMeta callback — vector_enabled', () => {
     const meta = await runWithMeta('alice');
     expect(meta).not.toBeNull();
     expect(meta!.vector_enabled).toBe(false);
+    expect(meta!.vector_disabled_reason).toBe('no_provider');
+  });
+
+  test('vector=false stamps explicit_ablation, not no_provider', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const meta = await runWithMeta('alice', { vector: false });
+    expect(meta).not.toBeNull();
+    expect(meta!.vector_enabled).toBe(false);
+    expect(meta!.vector_disabled_reason).toBe('explicit_ablation');
   });
 });
 

@@ -162,5 +162,7 @@ key when `loadConfigWithEngine` merges.
 `gbrain config set eval.capture true` **does** take effect on a live
 process. Capture re-reads the DB plane per call
 (`resolveEvalCaptureEnabled`) so a Fly or MCP recycle is not required.
-The same merge path lifts `eval.scrub_pii` and
-`search.exclude_slug_prefixes`.
+A `gbrain config set` from a different process is visible within 5
+seconds (the config snapshot is per-process; in-process invalidation
+does not cross process boundaries). The same merge path lifts
+`eval.scrub_pii` and `search.exclude_slug_prefixes`.

@@ -5,6 +5,8 @@ only.
 
 `test/e2e/serve-http-oauth.test.ts` additionally pins confidential POST/Basic revocation, public-client SDK fallthrough, malformed/mixed authentication rejection, cross-client isolation, unknown-token opacity, metadata auth methods, no-store responses, strict post-revoke `401`, and retryable backend `503` semantics.
 
+`test/config-snapshot.test.ts` pins the 5s per-engine `SELECT key, value FROM config` memo (TTL, invalidate, in-flight generation). `test/eval-private-bench.test.ts` pins the two-arm private-bench fail-closed gates, split defaulting, arm-proof predicate (`explicit_ablation` vs `no_provider` vs `embed_failed`), and glossary coverage for receipt metrics.
+
 ### Test command tiers
 
 Seven test command tiers, each with a clear scope:

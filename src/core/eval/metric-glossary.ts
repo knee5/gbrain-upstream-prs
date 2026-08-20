@@ -66,6 +66,11 @@ export const METRIC_GLOSSARY: Readonly<Record<string, Readonly<MetricGlossEntry>
     eli10: 'Fraction of queries where the right page is in the top 3 results. NamedThingBench requires the multi-chunk-dilution family to hit 1.0 — a page with one strong chunk among many weak ones must never be buried.',
     range: '0..1, higher is better.',
   }),
+  'hit@k': Object.freeze({
+    industry_term: 'Hit rate at k (Hit@k)',
+    eli10: 'Fraction of queries where at least one relevant page appears in the top k results. Binary per query (hit or miss), then averaged. Distinct from recall@k, which is the fraction of all relevant pages found in the top k.',
+    range: '0..1, higher is better. Hit@5 = 0.55 means 55 of 100 queries had a relevant page in the top 5.',
+  }),
   'avg_rank1_score': Object.freeze({
     industry_term: 'Average rank-1 match score',
     eli10: 'The mean base (pre-boost) retrieval score of the TOP result across recent searches, from `gbrain search stats`. It is NOT a labeled accuracy number — it is a drift signal: if this trends DOWN over time, retrieval quality is regressing (the early warning that would have caught the duplicate-page incident before a human did).',
@@ -132,6 +137,11 @@ export const METRIC_GLOSSARY: Readonly<Record<string, Readonly<MetricGlossEntry>
     industry_term: 'p99 latency (ms)',
     eli10: '99th percentile wall-clock time per search call. The latency that 1% of users see — long-tail experience, not the average.',
     range: '0..unbounded. Warm-cache hits should be <50ms; tokenmax with expansion can exceed 200ms due to the Haiku call.',
+  }),
+  'p95_latency_ms': Object.freeze({
+    industry_term: 'p95 latency (ms)',
+    eli10: '95th percentile wall-clock time per search call. The latency that 1 in 20 queries sees. The sealed 20-query Hermes baseline reported 1.916s p95 on the live 0.46.12.3 binary.',
+    range: '0..unbounded. Compare against the sealed baseline, not against p50.',
   }),
 
   // ────────────────────────────────────────────────────────────────────────
@@ -280,10 +290,10 @@ export function renderMetricGlossaryMarkdown(): string {
 
   const groups: Array<[string, string[]]> = [
     ['Retrieval Metrics', ['precision@k', 'recall@k', 'mrr', 'ndcg@k']],
-    ['Retrieval-Quality / Evidence Metrics (NamedThingBench)', ['hit@1', 'hit@3', 'avg_rank1_score', 'create_safety']],
+    ['Retrieval-Quality / Evidence Metrics (NamedThingBench)', ['hit@1', 'hit@3', 'hit@k', 'avg_rank1_score', 'create_safety']],
     ['Set-Similarity / Stability Metrics', ['jaccard@k', 'top1_stability']],
     ['Statistical-Significance Metrics', ['p_value', 'confidence_interval']],
-    ['Operational / Cost Metrics', ['cache_hit_rate', 'avg_results', 'avg_tokens', 'cost_per_query_usd', 'p99_latency_ms']],
+    ['Operational / Cost Metrics', ['cache_hit_rate', 'avg_results', 'avg_tokens', 'cost_per_query_usd', 'p99_latency_ms', 'p95_latency_ms']],
     ['Result-Sizing Metrics', ['autocut.signal', 'autocut.gap_ratio']],
     ['BrainBench — Cross-Harness Memory Conformance', [
       'know_to_ask_failure_rate', 'false_fire_rate', 'push_precision', 'push_recall',

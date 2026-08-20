@@ -56,6 +56,14 @@ Every metric `gbrain eval *` and `gbrain search stats` reports has a plain-Engli
 
 **Range:** 0..1, higher is better.
 
+### Hit rate at k (Hit@k)
+
+**Key:** `hit@k`
+
+**Plain English:** Fraction of queries where at least one relevant page appears in the top k results. Binary per query (hit or miss), then averaged. Distinct from recall@k, which is the fraction of all relevant pages found in the top k.
+
+**Range:** 0..1, higher is better. Hit@5 = 0.55 means 55 of 100 queries had a relevant page in the top 5.
+
 ### Average rank-1 match score
 
 **Key:** `avg_rank1_score`
@@ -149,6 +157,14 @@ Every metric `gbrain eval *` and `gbrain search stats` reports has a plain-Engli
 **Plain English:** 99th percentile wall-clock time per search call. The latency that 1% of users see — long-tail experience, not the average.
 
 **Range:** 0..unbounded. Warm-cache hits should be <50ms; tokenmax with expansion can exceed 200ms due to the Haiku call.
+
+### p95 latency (ms)
+
+**Key:** `p95_latency_ms`
+
+**Plain English:** 95th percentile wall-clock time per search call. The latency that 1 in 20 queries sees. The sealed 20-query Hermes baseline reported 1.916s p95 on the live 0.46.12.3 binary.
+
+**Range:** 0..unbounded. Compare against the sealed baseline, not against p50.
 
 ## Result-Sizing Metrics
 

@@ -143,7 +143,7 @@ export interface EvalRunRecord {
   schema_version: 3;
   run_id: string;
   ran_at: string;
-  suite: ValidSuite;
+  suite: ValidSuite | 'private-bench';
   mode: SearchMode | 'n/a';
   commit: string;
   seed: number;
@@ -154,7 +154,7 @@ export interface EvalRunRecord {
   error?: string;
 }
 
-function getRepoRoot(): string {
+export function getRepoRoot(): string {
   try {
     const { execSync } = require('child_process') as typeof import('child_process');
     return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim();
@@ -163,7 +163,7 @@ function getRepoRoot(): string {
   }
 }
 
-function getCommitSha(): string {
+export function getCommitSha(): string {
   try {
     const { execSync } = require('child_process') as typeof import('child_process');
     return execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();

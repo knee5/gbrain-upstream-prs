@@ -43,7 +43,7 @@ function makeTornDownEngine(poolResult: unknown): { engine: PostgresEngine; reco
 
 describe('PostgresEngine non-batch config accessors self-heal (PR #1891 takeover)', () => {
   it('getConfig reconnects + retries a null instance pool, then returns the value', async () => {
-    const { engine, reconnects } = makeTornDownEngine([{ value: 'live-value' }]);
+    const { engine, reconnects } = makeTornDownEngine([{ key: 'some.key', value: 'live-value' }]);
     expect(await engine.getConfig('some.key')).toBe('live-value');
     expect(reconnects()).toBe(1); // exactly one reconnect closed the gap
   });
@@ -61,7 +61,7 @@ describe('PostgresEngine non-batch config accessors self-heal (PR #1891 takeover
   });
 
   it('listConfigKeys reconnects + retries a null instance pool, then returns keys', async () => {
-    const { engine, reconnects } = makeTornDownEngine([{ key: 'a.one' }, { key: 'a.two' }]);
+    const { engine, reconnects } = makeTornDownEngine([{ key: 'a.one', value: '1' }, { key: 'a.two', value: '2' }]);
     expect(await engine.listConfigKeys('a.')).toEqual(['a.one', 'a.two']);
     expect(reconnects()).toBe(1);
   });

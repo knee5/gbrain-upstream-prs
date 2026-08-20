@@ -53,6 +53,7 @@ describe('awaitPendingEvalCaptures', () => {
 
   test('drains a settled capture to unfinished:0', async () => {
     const engine = {
+      getConfig: async () => 'true',
       logEvalCandidate: async () => 1,
       logEvalCaptureFailure: async () => {},
     } as unknown as BrainEngine;
@@ -63,6 +64,7 @@ describe('awaitPendingEvalCaptures', () => {
 
   test('a hanging capture is bounded by the timeout (not a hang)', async () => {
     const engine = {
+      getConfig: async () => 'true',
       // Never resolves — simulates a wedged DB write.
       logEvalCandidate: () => new Promise<number>(() => {}),
       logEvalCaptureFailure: async () => {},

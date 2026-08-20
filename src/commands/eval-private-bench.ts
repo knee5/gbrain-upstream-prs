@@ -1,20 +1,19 @@
 /**
- * gbrain eval private-bench --qrels <file> [--out receipt.json]
+ * gbrain eval private-bench --qrels <file> [--out receipt.json] [--split development|heldout]
  *
- * Three-arm private retrieval bench: lexical (vector=false), hybrid
- * (vector+keyword, expansion off), and semantic (hybrid that must prove
- * vector_enabled=true). Fail closed on unlabeled rows, fewer than 100
- * reviewed queries, source leaks, or missing arm metadata.
+ * Two-arm private retrieval bench: lexical (vector=false, explicit_ablation)
+ * and hybrid (vector+keyword, expansion off). Fail closed on unlabeled rows
+ * in the selected split, fewer than 100 reviewed queries, source leaks, or
+ * missing arm metadata.
  *
- * Reuses parseQrelsFile for the query/relevant shape and metric-glossary
- * for recall@5 + mrr. Calls bare hybridSearch (not hybridSearchCached) so
- * a lexical arm cannot read a hybrid cache row. Does not manufacture
- * qrels. Harvest stays `gbrain eval export` plus the staging
- * bootstrap_candidates.py.
+ * Default split is development. Pass --split heldout to score the sealed
+ * split. Reuses parseQrelsFile and the metric glossary. Calls bare
+ * hybridSearch (not hybridSearchCached) so a lexical arm cannot read a
+ * hybrid cache row. Does not manufacture qrels.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { readFileSync, writeFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import type { BrainEngine } from '../core/engine.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
 import { mrr as mrrAtK } from '../core/search/eval.ts';
@@ -24,8 +23,12 @@ import {
   QrelsParseError,
   refKey,
 } from '../core/bench/qrels-file.ts';
-import { buildMetricGlossaryMeta } from '../core/eval/metric-glossary.ts';
+import { buildMetricGlossaryMeta, getMetricGloss } from '../core/eval/metric-glossary.ts';
 import type { HybridSearchMeta } from '../core/types.ts';
+import { persistRunRecord, getRepoRoot, getCommitSha, type EvalRunRecord } from './eval-run-all.ts';
+
+export const PRIVATE_BENCH_MIN_REVIEWED = 100;
+export const PRIVATE_BENCH_ARM_METRICS = ['recall@5', 'hit@5', 'mrr', 'p95_latency_ms'] as const;
 
 interface Relevance {
   source_id: string;
@@ -33,7 +36,7 @@ interface Relevance {
   grade?: number;
 }
 
-interface BenchQuery {
+export interface PrivateBenchQuery {
   query_id: string;
   query: string;
   source_id: string;
@@ -43,6 +46,40 @@ interface BenchQuery {
   relevant: Relevance[];
 }
 
+export type PrivateBenchArm = 'lexical' | 'hybrid';
+export type PrivateBenchSplit = 'development' | 'heldout';
+export type ArmMetaVerdict = 'ok' | 'meta_missing' | 'vector_proof_failed';
+
+export function resolvePrivateBenchSplit(args: string[]): PrivateBenchSplit {
+  const idx = args.indexOf('--split');
+  const raw = idx >= 0 ? args[idx + 1] : 'development';
+  if (raw === 'heldout' || raw === 'development') return raw;
+  throw new Error(`--split must be development or heldout (got ${raw ?? 'missing'})`);
+}
+
+export function selectSplitQueries(
+  queries: PrivateBenchQuery[],
+  split: PrivateBenchSplit,
+): PrivateBenchQuery[] {
+  return queries.filter(q => (q.split ?? 'development') === split);
+}
+
+export function evaluateArmMeta(armName: PrivateBenchArm, meta: HybridSearchMeta | null): ArmMetaVerdict {
+  if (!meta) return 'meta_missing';
+  if (armName === 'lexical') {
+    if (meta.vector_enabled !== false || meta.vector_disabled_reason !== 'explicit_ablation') {
+      return 'vector_proof_failed';
+    }
+    return 'ok';
+  }
+  if (meta.vector_enabled !== true) return 'vector_proof_failed';
+  return 'ok';
+}
+
+export function receiptMetricKeysHaveGloss(keys: readonly string[]): boolean {
+  return keys.every(k => Boolean(getMetricGloss(k)?.eli10));
+}
+
 function p95(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -50,30 +87,24 @@ function p95(values: number[]): number {
   return sorted[idx]!;
 }
 
-function repoRoot(): string {
-  try {
-    const { execSync } = require('child_process') as typeof import('child_process');
-    return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim();
-  } catch {
-    return process.cwd();
-  }
-}
-
-function appendLedger(record: Record<string, unknown>, ledgerPath?: string): void {
-  const path = ledgerPath ?? join(repoRoot(), '.gbrain-evals', 'eval-results.jsonl');
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify(record) + '\n', 'utf-8');
-}
-
 export async function runEvalPrivateBench(engine: BrainEngine, args: string[]): Promise<void> {
+  const startedAt = Date.now();
   const qrelsIdx = args.indexOf('--qrels');
   const outIdx = args.indexOf('--out');
   const ledgerIdx = args.indexOf('--ledger');
-  const qrelsPath = qrelsIdx >= 0 ? args[qrelsIdx + 1] : args.find(a => !a.startsWith('--'));
+  const qrelsPath = qrelsIdx >= 0 ? args[qrelsIdx + 1] : args.find(a => a && !a.startsWith('--') && a !== 'private-bench');
   const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
-  const ledgerPath = ledgerIdx >= 0 ? args[ledgerIdx + 1] : undefined;
+  const ledgerDir = ledgerIdx >= 0 ? args[ledgerIdx + 1] : undefined;
   if (!qrelsPath) {
-    console.error('Usage: gbrain eval private-bench --qrels <file.json> [--out receipt.json] [--ledger eval-results.jsonl]');
+    console.error('Usage: gbrain eval private-bench --qrels <file.json> [--out receipt.json] [--split development|heldout] [--ledger dir]');
+    process.exit(2);
+  }
+
+  let split: PrivateBenchSplit;
+  try {
+    split = resolvePrivateBenchSplit(args);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
     process.exit(2);
   }
 
@@ -97,17 +128,18 @@ export async function runEvalPrivateBench(engine: BrainEngine, args: string[]): 
     console.error('qrels file must contain a queries array');
     process.exit(2);
   }
-  const rawQueries = raw.queries as BenchQuery[];
-  const unlabeled = rawQueries.filter(q => q.label_status !== 'reviewed');
+  const rawQueries = raw.queries as PrivateBenchQuery[];
+  const inSplit = selectSplitQueries(rawQueries, split);
+  const unlabeled = inSplit.filter(q => q.label_status !== 'reviewed');
   if (unlabeled.length > 0) {
-    console.error(`Fail closed: ${unlabeled.length} unlabeled quer${unlabeled.length === 1 ? 'y' : 'ies'}`);
+    console.error(`Fail closed: ${unlabeled.length} unlabeled quer${unlabeled.length === 1 ? 'y' : 'ies'} in split ${split}`);
     process.exit(1);
   }
-  const reviewedRaw = rawQueries.filter(
+  const reviewedRaw = inSplit.filter(
     q => q.label_status === 'reviewed' && q.privacy_reviewed && Array.isArray(q.relevant) && q.relevant.length > 0,
   );
-  if (reviewedRaw.length < 100) {
-    console.error(`Fail closed: ${reviewedRaw.length} reviewed queries (need >= 100)`);
+  if (reviewedRaw.length < PRIVATE_BENCH_MIN_REVIEWED) {
+    console.error(`Fail closed: ${reviewedRaw.length} reviewed queries in split ${split} (need >= ${PRIVATE_BENCH_MIN_REVIEWED})`);
     process.exit(1);
   }
 
@@ -128,11 +160,10 @@ export async function runEvalPrivateBench(engine: BrainEngine, args: string[]): 
   }
 
   const byId = new Map(reviewedRaw.map(q => [q.query_id, q]));
-  const arms = [
-    { name: 'lexical', opts: { vector: false as const, expansion: false } },
+  const arms: ReadonlyArray<{ name: PrivateBenchArm; opts: { vector?: false; expansion: false } }> = [
+    { name: 'lexical', opts: { vector: false, expansion: false } },
     { name: 'hybrid', opts: { expansion: false } },
-    { name: 'semantic', opts: { expansion: false } },
-  ] as const;
+  ];
 
   const armReports: Record<string, unknown> = {};
   for (const arm of arms) {
@@ -149,23 +180,18 @@ export async function runEvalPrivateBench(engine: BrainEngine, args: string[]): 
         console.error(`Fail closed: parsed query_id ${q.query_id} missing from reviewed set`);
         process.exit(1);
       }
-      let meta: HybridSearchMeta | null = null;
+      const metaBox: { current: HybridSearchMeta | null } = { current: null };
       const t0 = Date.now();
       const results = await hybridSearch(engine, q.query, {
         limit: 10,
         sourceId: rawQ.source_id,
         ...arm.opts,
-        onMeta: (m) => { meta = m; },
+        onMeta: (m) => { metaBox.current = m; },
       });
       lats.push(Date.now() - t0);
-      if (!meta) metaMissing += 1;
-      if (arm.name === 'lexical') {
-        if (!meta || meta.vector_enabled !== false || meta.vector_disabled_reason !== 'explicit_ablation') {
-          vectorProofFailed += 1;
-        }
-      } else if (arm.name === 'semantic' || arm.name === 'hybrid') {
-        if (!meta || meta.vector_enabled !== true) vectorProofFailed += 1;
-      }
+      const verdict = evaluateArmMeta(arm.name, metaBox.current);
+      if (verdict === 'meta_missing') metaMissing += 1;
+      if (verdict === 'vector_proof_failed') vectorProofFailed += 1;
       const gotKeys = results.map(r => refKey({ source_id: r.source_id ?? rawQ.source_id, slug: r.slug }));
       const relevantKeys = q.relevant.map(r => refKey(r));
       const relevantSet = new Set(relevantKeys);
@@ -183,33 +209,40 @@ export async function runEvalPrivateBench(engine: BrainEngine, args: string[]): 
     armReports[arm.name] = {
       n: parsed.queries.length,
       'recall@5': recalls.reduce((a, b) => a + b, 0) / recalls.length,
-      hit_at_5: hits.filter(Boolean).length / hits.length,
+      'hit@5': hits.filter(Boolean).length / hits.length,
       mrr: mrrs.reduce((a, b) => a + b, 0) / mrrs.length,
       p95_latency_ms: p95(lats),
     };
   }
 
+  const glossKeys = [...PRIVATE_BENCH_ARM_METRICS];
   const receipt = {
     schema_version: 1,
     kind: 'gbrain-private-bench',
     benchmark_id: raw.benchmark_id,
     split_seed: raw.split_seed,
+    split,
     reviewed: parsed.queries.length,
     arms: armReports,
     _meta: {
-      metric_glossary: buildMetricGlossaryMeta(['recall@5', 'mrr']),
+      metric_glossary: buildMetricGlossaryMeta(glossKeys),
     },
   };
   const text = JSON.stringify(receipt, null, 2);
   if (outPath) writeFileSync(outPath, text + '\n');
-  appendLedger({
+  const record: EvalRunRecord = {
     schema_version: 3,
+    run_id: randomUUID(),
+    ran_at: new Date().toISOString(),
     suite: 'private-bench',
     mode: 'n/a',
-    ran_at: new Date().toISOString(),
+    commit: getCommitSha(),
+    seed: 0,
+    limit: 10,
+    params: { qrels: qrelsPath, reviewed: parsed.queries.length, split, receipt },
     status: 'completed',
-    params: { qrels: qrelsPath, reviewed: parsed.queries.length },
-    receipt,
-  }, ledgerPath);
+    duration_ms: Date.now() - startedAt,
+  };
+  persistRunRecord(getRepoRoot(), record, ledgerDir);
   console.log(text);
 }

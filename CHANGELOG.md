@@ -4,17 +4,19 @@ All notable changes to GBrain will be documented in this file.
 
 ## [0.46.23.0] - 2026-08-19
 
-**You can now run a three-arm retrieval bench, turn capture on from the
+**You can now run a two-arm retrieval bench, turn capture on from the
 DB plane without a recycle, and hide swamp prefixes with a config key.**
 Local callers can also force a lexical-only search (`vector=false`) that
 is distinct from a missing embedding provider.
 
 ### Added
 
-- **`gbrain eval private-bench --qrels`** — fail-closed three-arm bench
-  (lexical / hybrid / semantic). Refuses unlabeled rows and fewer than
-  100 reviewed queries. Reuses `parseQrelsFile` and the metric glossary.
-  Writes `.gbrain-evals/eval-results.jsonl`. Does not manufacture qrels.
+- **`gbrain eval private-bench --qrels`** — fail-closed two-arm bench
+  (lexical / hybrid). Default split is development. Pass `--split heldout`
+  to score the sealed split. Refuses unlabeled rows in the selected split
+  and fewer than 100 reviewed queries. Reuses `parseQrelsFile` and the
+  metric glossary. Writes `.gbrain-evals/eval-results.jsonl`. Does not
+  manufacture qrels.
 - **Lexical ablation** — local/trusted `search`/`query` accept
   `vector=false`. Hybrid then runs keyword + title + relational + RRF +
   alias-hop with `vector_disabled_reason: 'explicit_ablation'` and skips
@@ -40,7 +42,7 @@ is distinct from a missing embedding provider.
 
 - Turn capture on without a restart: `gbrain config set eval.capture true`.
 - Hide a swamp prefix: `gbrain config set search.exclude_slug_prefixes 'scratch/hosted-skills-staging/'`.
-- Run a lexical arm: `gbrain search --vector false "<query>"` (local only).
+- Run a lexical arm: `gbrain search --no-vector "<query>"` (local only).
 - Score a sealed private qrel file: `gbrain eval private-bench --qrels <file.json>`.
   The file must have at least 100 privacy-reviewed labeled queries. Do not
   invent labels from retrieved slugs.

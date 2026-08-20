@@ -1385,6 +1385,7 @@ export async function hybridSearch(
     stampBudgetStage(degraded, noEmbedBudgetMeta);
     emitMeta({
       vector_enabled: false,
+      vector_disabled_reason: 'no_provider',
       detail_resolved: detailResolved,
       expansion_applied: false,
       intent: suggestions.intent,
@@ -1733,6 +1734,7 @@ export async function hybridSearch(
     stampBudgetStage(degraded, kwBudgetMeta);
     emitMeta({
       vector_enabled: false,
+      vector_disabled_reason: 'embed_failed',
       detail_resolved: detailResolved,
       expansion_applied: expansionApplied,
       intent: suggestions.intent,
