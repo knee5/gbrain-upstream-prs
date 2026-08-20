@@ -1,0 +1,8 @@
+{"intent": "quality bar", "expected_skill": "quality-bar"}
+{"intent": "the standard a piece of work must meet before it counts as done", "expected_skill": "quality-bar"}
+{"intent": "verified rather than assumed", "expected_skill": "quality-bar"}
+{"intent": "complete rather than partial", "expected_skill": "quality-bar"}
+{"intent": "and honest about what failed", "expected_skill": "quality-bar"}
+{"intent": "help me with quality bar", "expected_skill": "quality-bar"}
+{"intent": "run the quality bar process", "expected_skill": "quality-bar"}
+{"intent": "the standard a piece of work must meet before it counts as done: verified rather than assumed, complete rather", "expected_skill": "quality-bar"}

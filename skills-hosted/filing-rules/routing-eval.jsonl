@@ -1,0 +1,8 @@
+{"intent": "filing rules", "expected_skill": "filing-rules"}
+{"intent": "the full reference for where a document belongs in a knowledge base", "expected_skill": "filing-rules"}
+{"intent": "directory meanings", "expected_skill": "filing-rules"}
+{"intent": "and the decision order when a page could live in two places", "expected_skill": "filing-rules"}
+{"intent": "help me with filing rules", "expected_skill": "filing-rules"}
+{"intent": "run the filing rules process", "expected_skill": "filing-rules"}
+{"intent": "the full reference for where a document belongs in a knowledge base: directory meanings, naming, and the decis", "expected_skill": "filing-rules"}
+{"intent": "how do I approach filing rules", "expected_skill": "filing-rules"}

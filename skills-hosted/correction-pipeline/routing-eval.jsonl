@@ -1,0 +1,8 @@
+{"intent": "correction pipeline", "expected_skill": "correction-pipeline"}
+{"intent": "propagate a correction through everything that depends on a wrong fact", "expected_skill": "correction-pipeline"}
+{"intent": "find downstream claims", "expected_skill": "correction-pipeline"}
+{"intent": "fix them", "expected_skill": "correction-pipeline"}
+{"intent": "and leave a visible correction trail instead of a silent edit", "expected_skill": "correction-pipeline"}
+{"intent": "help me with correction pipeline", "expected_skill": "correction-pipeline"}
+{"intent": "run the correction pipeline process", "expected_skill": "correction-pipeline"}
+{"intent": "propagate a correction through everything that depends on a wrong fact: find downstream claims, fix them, and ", "expected_skill": "correction-pipeline"}

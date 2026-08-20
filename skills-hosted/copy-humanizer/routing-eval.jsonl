@@ -1,0 +1,5 @@
+{"intent": "copy humanizer", "expected_skill": "copy-humanizer"}
+{"intent": "help me with copy humanizer", "expected_skill": "copy-humanizer"}
+{"intent": "run the copy humanizer process", "expected_skill": "copy-humanizer"}
+{"intent": "run before shipping any user-facing prose (landing pages, blog posts, emails, social posts, readme and docs)", "expected_skill": "copy-humanizer"}
+{"intent": "how do I approach copy humanizer", "expected_skill": "copy-humanizer"}

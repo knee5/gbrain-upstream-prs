@@ -1,0 +1,8 @@
+{"intent": "code review checklist", "expected_skill": "code-review-checklist"}
+{"intent": "structured code review of a diff", "expected_skill": "code-review-checklist"}
+{"intent": "scope-drift detection", "expected_skill": "code-review-checklist"}
+{"intent": "a critical correctness pass", "expected_skill": "code-review-checklist"}
+{"intent": "confidence calibration", "expected_skill": "code-review-checklist"}
+{"intent": "adversarial review", "expected_skill": "code-review-checklist"}
+{"intent": "help me with code review checklist", "expected_skill": "code-review-checklist"}
+{"intent": "run the code review checklist process", "expected_skill": "code-review-checklist"}

@@ -1,0 +1,7 @@
+{"intent": "measure before you fix", "expected_skill": "measure-before-you-fix"}
+{"intent": "someone proposes a performance", "expected_skill": "measure-before-you-fix"}
+{"intent": "quality fix", "expected_skill": "measure-before-you-fix"}
+{"intent": "help me with measure before you fix", "expected_skill": "measure-before-you-fix"}
+{"intent": "run the measure before you fix process", "expected_skill": "measure-before-you-fix"}
+{"intent": "refuse to optimize or repair anything before you have a baseline measurement and a named metric", "expected_skill": "measure-before-you-fix"}
+{"intent": "how do I approach measure before you fix", "expected_skill": "measure-before-you-fix"}

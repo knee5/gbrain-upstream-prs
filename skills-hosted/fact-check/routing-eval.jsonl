@@ -1,0 +1,8 @@
+{"intent": "fact check", "expected_skill": "fact-check"}
+{"intent": "publishing anything factual", "expected_skill": "fact-check"}
+{"intent": "systematically verify claims in a document", "expected_skill": "fact-check"}
+{"intent": "classify each claim", "expected_skill": "fact-check"}
+{"intent": "find primary sources", "expected_skill": "fact-check"}
+{"intent": "rate confidence", "expected_skill": "fact-check"}
+{"intent": "help me with fact check", "expected_skill": "fact-check"}
+{"intent": "run the fact check process", "expected_skill": "fact-check"}

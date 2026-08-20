@@ -1,0 +1,8 @@
+{"intent": "repo architecture", "expected_skill": "repo-architecture"}
+{"intent": "creating a page", "expected_skill": "repo-architecture"}
+{"intent": "unsure of its home", "expected_skill": "repo-architecture"}
+{"intent": "when auditing a messy folder structure", "expected_skill": "repo-architecture"}
+{"intent": "decide where a new note or document belongs in a knowledge base", "expected_skill": "repo-architecture"}
+{"intent": "file by primary subject", "expected_skill": "repo-architecture"}
+{"intent": "help me with repo architecture", "expected_skill": "repo-architecture"}
+{"intent": "run the repo architecture process", "expected_skill": "repo-architecture"}

@@ -1,0 +1,7 @@
+{"intent": "salience and recency", "expected_skill": "salience-and-recency"}
+{"intent": "summarizing a stream of updates", "expected_skill": "salience-and-recency"}
+{"intent": "deciding what belongs in long-term notes", "expected_skill": "salience-and-recency"}
+{"intent": "help me with salience and recency", "expected_skill": "salience-and-recency"}
+{"intent": "run the salience and recency process", "expected_skill": "salience-and-recency"}
+{"intent": "weigh information by durable importance rather than by how recently it arrived, and mark facts that expire", "expected_skill": "salience-and-recency"}
+{"intent": "how do I approach salience and recency", "expected_skill": "salience-and-recency"}

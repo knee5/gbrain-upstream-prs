@@ -1,0 +1,8 @@
+{"intent": "investigate", "expected_skill": "investigate"}
+{"intent": "bug where the cause is not obvious", "expected_skill": "investigate"}
+{"intent": "root-cause debugging in five phases", "expected_skill": "investigate"}
+{"intent": "pattern analysis", "expected_skill": "investigate"}
+{"intent": "hypothesis testing", "expected_skill": "investigate"}
+{"intent": "implementation", "expected_skill": "investigate"}
+{"intent": "help me with investigate", "expected_skill": "investigate"}
+{"intent": "run the investigate process", "expected_skill": "investigate"}

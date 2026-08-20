@@ -1,0 +1,5 @@
+{"intent": "resolve before asking", "expected_skill": "resolve-before-asking"}
+{"intent": "help me with resolve before asking", "expected_skill": "resolve-before-asking"}
+{"intent": "run the resolve before asking process", "expected_skill": "resolve-before-asking"}
+{"intent": "exhaust what you can determine yourself before interrupting a human with a question, and when you must ask, as", "expected_skill": "resolve-before-asking"}
+{"intent": "how do I approach resolve before asking", "expected_skill": "resolve-before-asking"}

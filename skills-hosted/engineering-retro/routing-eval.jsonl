@@ -1,0 +1,8 @@
+{"intent": "engineering retro", "expected_skill": "engineering-retro"}
+{"intent": "run a retrospective over a period of work", "expected_skill": "engineering-retro"}
+{"intent": "what shipped", "expected_skill": "engineering-retro"}
+{"intent": "what patterns recurred", "expected_skill": "engineering-retro"}
+{"intent": "what to change", "expected_skill": "engineering-retro"}
+{"intent": "help me with engineering retro", "expected_skill": "engineering-retro"}
+{"intent": "run the engineering retro process", "expected_skill": "engineering-retro"}
+{"intent": "run a retrospective over a period of work: what shipped, what patterns recurred, what to change", "expected_skill": "engineering-retro"}

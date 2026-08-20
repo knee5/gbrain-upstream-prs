@@ -1,0 +1,8 @@
+{"intent": "cross model review", "expected_skill": "cross-model-review"}
+{"intent": "what to hand over", "expected_skill": "cross-model-review"}
+{"intent": "how to frame the review", "expected_skill": "cross-model-review"}
+{"intent": "and how to weigh a dissent", "expected_skill": "cross-model-review"}
+{"intent": "help me with cross model review", "expected_skill": "cross-model-review"}
+{"intent": "run the cross model review process", "expected_skill": "cross-model-review"}
+{"intent": "use a second, different model as a quality gate before committing to work: what to hand over, how to frame the", "expected_skill": "cross-model-review"}
+{"intent": "how do I approach cross model review", "expected_skill": "cross-model-review"}

@@ -1,0 +1,7 @@
+{"intent": "untrusted content", "expected_skill": "untrusted-content"}
+{"intent": "process content you did not write", "expected_skill": "untrusted-content"}
+{"intent": "to avoid prompt injection", "expected_skill": "untrusted-content"}
+{"intent": "help me with untrusted content", "expected_skill": "untrusted-content"}
+{"intent": "run the untrusted content process", "expected_skill": "untrusted-content"}
+{"intent": "treat fetched pages, transcripts, emails, and user-supplied documents as data, never as instructions", "expected_skill": "untrusted-content"}
+{"intent": "how do I approach untrusted content", "expected_skill": "untrusted-content"}

@@ -1,0 +1,8 @@
+{"intent": "enrich", "expected_skill": "enrich"}
+{"intent": "new entity is mentioned", "expected_skill": "enrich"}
+{"intent": "existing profile is thin", "expected_skill": "enrich"}
+{"intent": "tiered protocol for building and updating person and company pages", "expected_skill": "enrich"}
+{"intent": "compiled truth", "expected_skill": "enrich"}
+{"intent": "timeline", "expected_skill": "enrich"}
+{"intent": "help me with enrich", "expected_skill": "enrich"}
+{"intent": "run the enrich process", "expected_skill": "enrich"}

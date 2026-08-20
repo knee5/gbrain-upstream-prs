@@ -1,0 +1,6 @@
+{"intent": "kb query", "expected_skill": "kb-query"}
+{"intent": "research questions where the answer must be traceable to sources", "expected_skill": "kb-query"}
+{"intent": "help me with kb query", "expected_skill": "kb-query"}
+{"intent": "run the kb query process", "expected_skill": "kb-query"}
+{"intent": "answer a question from a knowledge base using layered search, synthesis across pages, and citation propagation", "expected_skill": "kb-query"}
+{"intent": "how do I approach kb query", "expected_skill": "kb-query"}

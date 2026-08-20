@@ -6,7 +6,6 @@ triggers:
 - stress-test this
 - poke holes in this
 - challenge my thinking
-- interview me about this plan
 ---
 
 Interview the user relentlessly until you reach a shared understanding. Map this as a **design tree**: every decision branches into the decisions that hang off it.

@@ -1,0 +1,8 @@
+{"intent": "design critique", "expected_skill": "design-critique"}
+{"intent": "designer's-eye critique of a live interface", "expected_skill": "design-critique"}
+{"intent": "first impression", "expected_skill": "design-critique"}
+{"intent": "design-system extraction", "expected_skill": "design-critique"}
+{"intent": "page-by-page audit", "expected_skill": "design-critique"}
+{"intent": "interaction flow", "expected_skill": "design-critique"}
+{"intent": "help me with design critique", "expected_skill": "design-critique"}
+{"intent": "run the design critique process", "expected_skill": "design-critique"}

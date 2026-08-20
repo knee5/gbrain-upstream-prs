@@ -3,9 +3,7 @@ name: to-questionnaire
 description: Turn a decision you can't fully answer into a questionnaire for someone else to fill in.
 triggers:
 - turn this into a questionnaire
-- ask someone else
-- I need input from
-- make a form for this decision
+- a decision needing someone else's input
 disable-model-invocation: true
 ---
 

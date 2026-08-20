@@ -1,0 +1,8 @@
+{"intent": "site cordon", "expected_skill": "site-cordon"}
+{"intent": "what to hide", "expected_skill": "site-cordon"}
+{"intent": "what to redirect", "expected_skill": "site-cordon"}
+{"intent": "and what to tell users", "expected_skill": "site-cordon"}
+{"intent": "help me with site cordon", "expected_skill": "site-cordon"}
+{"intent": "run the site cordon process", "expected_skill": "site-cordon"}
+{"intent": "safely cordon off a broken or half-finished part of a live site instead of shipping it or reverting everything", "expected_skill": "site-cordon"}
+{"intent": "how do I approach site cordon", "expected_skill": "site-cordon"}

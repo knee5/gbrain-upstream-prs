@@ -1,0 +1,8 @@
+{"intent": "signal detector", "expected_skill": "signal-detector"}
+{"intent": "separate signal from noise in a stream of inputs", "expected_skill": "signal-detector"}
+{"intent": "score items for durable relevance", "expected_skill": "signal-detector"}
+{"intent": "discard the merely recent", "expected_skill": "signal-detector"}
+{"intent": "and route what survives", "expected_skill": "signal-detector"}
+{"intent": "help me with signal detector", "expected_skill": "signal-detector"}
+{"intent": "run the signal detector process", "expected_skill": "signal-detector"}
+{"intent": "separate signal from noise in a stream of inputs: score items for durable relevance, discard the merely recent", "expected_skill": "signal-detector"}

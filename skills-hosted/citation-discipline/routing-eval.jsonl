@@ -1,0 +1,7 @@
+{"intent": "citation discipline", "expected_skill": "citation-discipline"}
+{"intent": "reviewing a document for unsourced assertions", "expected_skill": "citation-discipline"}
+{"intent": "broken references", "expected_skill": "citation-discipline"}
+{"intent": "help me with citation discipline", "expected_skill": "citation-discipline"}
+{"intent": "run the citation discipline process", "expected_skill": "citation-discipline"}
+{"intent": "audit and fix citation formatting so every factual claim carries an inline source", "expected_skill": "citation-discipline"}
+{"intent": "how do I approach citation discipline", "expected_skill": "citation-discipline"}

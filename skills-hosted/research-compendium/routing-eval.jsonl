@@ -1,0 +1,8 @@
+{"intent": "research compendium", "expected_skill": "research-compendium"}
+{"intent": "build a durable multi-source research document on a topic", "expected_skill": "research-compendium"}
+{"intent": "plan the questions", "expected_skill": "research-compendium"}
+{"intent": "gather and archive sources", "expected_skill": "research-compendium"}
+{"intent": "synthesize", "expected_skill": "research-compendium"}
+{"intent": "and keep it updatable rather than one-shot", "expected_skill": "research-compendium"}
+{"intent": "help me with research compendium", "expected_skill": "research-compendium"}
+{"intent": "run the research compendium process", "expected_skill": "research-compendium"}

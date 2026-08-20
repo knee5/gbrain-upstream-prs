@@ -1,0 +1,8 @@
+{"intent": "academic verify", "expected_skill": "academic-verify"}
+{"intent": "document cites studies", "expected_skill": "academic-verify"}
+{"intent": "verify academic and research citations", "expected_skill": "academic-verify"}
+{"intent": "confirm the paper exists", "expected_skill": "academic-verify"}
+{"intent": "the claim matches the abstract", "expected_skill": "academic-verify"}
+{"intent": "and the finding has not been superseded or retracted", "expected_skill": "academic-verify"}
+{"intent": "help me with academic verify", "expected_skill": "academic-verify"}
+{"intent": "run the academic verify process", "expected_skill": "academic-verify"}

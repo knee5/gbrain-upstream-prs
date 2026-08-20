@@ -1,0 +1,8 @@
+{"intent": "plan ceo review", "expected_skill": "plan-ceo-review"}
+{"intent": "committing to a build", "expected_skill": "plan-ceo-review"}
+{"intent": "founder-mode review of a plan or spec", "expected_skill": "plan-ceo-review"}
+{"intent": "rethink the problem", "expected_skill": "plan-ceo-review"}
+{"intent": "hunt for the ten-star version", "expected_skill": "plan-ceo-review"}
+{"intent": "kill scope that does not earn its place", "expected_skill": "plan-ceo-review"}
+{"intent": "help me with plan ceo review", "expected_skill": "plan-ceo-review"}
+{"intent": "run the plan ceo review process", "expected_skill": "plan-ceo-review"}

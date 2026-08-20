@@ -1,11 +1,10 @@
 ---
 name: persona-qa
-description: Founder-grade, human-shoes walkthrough of a deployed flow using realistic context and outcome-based critique — use before ship-gate approval or after a material fix.
+description: "Walk a deployed flow as a realistic user with real context and critique it by outcome, not by whether the buttons work. Use before approving a ship or after a material fix"
 triggers:
-- persona QA
-- walk the flow as a user
-- does this actually work for a real user
-- founder walkthrough
+  - "persona qa"
+  - "approving a ship"
+  - "after a material fix"
 ---
 
 # persona-qa
@@ -115,4 +114,11 @@ format. **Pass:** original and adjacent cases pass on the new deployment.
 
 ## Proof-of-fire receipt (MANDATORY — adopted 2026-07-28, wiring-audit F8)
 
-A run of this gate that leaves no artifact did not happen. Before reporting your verdict, write a dated scorecard to `~/kb/scratch/gate-receipts/YYYY-MM-DD-<surface>-<skill-name>.md` containing: what was gated (commit/PR/deploy/copy reference), the verdict (and score where this skill scores), the specific findings/hits, and who ran it (agent/session). Commit the receipt to kb (add ONLY your file, never `git add -A`). The Friday retro counts ships against receipts; a ship without a matching receipt is a violation. This section exists because these gates showed zero recorded invocations across a period that included shipping the landing page.
+A run of this gate that leaves no artifact did not happen. Before reporting your verdict, write a dated scorecard to `your working notes folder/gate-receipts/YYYY-MM-DD-<surface>-<skill-name>.md` containing: what was gated (commit/PR/deploy/copy reference), the verdict (and score where this skill scores), the specific findings/hits, and who ran it (agent/session). Commit the receipt to kb (add ONLY your file, never `git add -A`). The Friday retro counts ships against receipts; a ship without a matching receipt is a violation. This section exists because these gates showed zero recorded invocations across a period that included shipping the landing page.
+
+
+---
+
+## Portability note
+
+This skill was adapted from a local agent setup for use in a hosted assistant. Machine-specific machinery (shell preambles, local CLIs, scheduled-job wiring, file paths on a personal laptop) has been removed; the methodology is intact. Where a step refers to a connected knowledge base or a repository, use whatever equivalent you have in this conversation — uploaded files, project memory, or what the user pastes in. If a step is impossible here, say so and continue with the rest rather than inventing output.

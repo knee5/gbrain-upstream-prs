@@ -1,0 +1,8 @@
+{"intent": "brain ops", "expected_skill": "brain-ops"}
+{"intent": "the core read-enrich-write loop for a personal knowledge base", "expected_skill": "brain-ops"}
+{"intent": "look up before answering", "expected_skill": "brain-ops"}
+{"intent": "cite sources inline", "expected_skill": "brain-ops"}
+{"intent": "enrich pages you touch", "expected_skill": "brain-ops"}
+{"intent": "and back-link", "expected_skill": "brain-ops"}
+{"intent": "help me with brain ops", "expected_skill": "brain-ops"}
+{"intent": "run the brain ops process", "expected_skill": "brain-ops"}

@@ -1,0 +1,8 @@
+{"intent": "office hours", "expected_skill": "office-hours"}
+{"intent": "startup diagnostic in the yc office-hours style", "expected_skill": "office-hours"}
+{"intent": "six forcing questions that expose whether the product has real pull", "expected_skill": "office-hours"}
+{"intent": "plus a builder mode for design-partner conversations", "expected_skill": "office-hours"}
+{"intent": "help me with office hours", "expected_skill": "office-hours"}
+{"intent": "run the office hours process", "expected_skill": "office-hours"}
+{"intent": "startup diagnostic in the yc office-hours style: six forcing questions that expose whether the product has rea", "expected_skill": "office-hours"}
+{"intent": "how do I approach office hours", "expected_skill": "office-hours"}

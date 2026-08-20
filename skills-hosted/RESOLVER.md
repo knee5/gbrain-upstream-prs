@@ -1,50 +1,97 @@
 # Hosted Skill Resolver
 
-Routing table for the skill catalog served by the gbrain MCP bridge to hosted
-surfaces (claude.ai, ChatGPT, Grok). These skills carry judgment, not local
-mechanics: none shells out to a CLI, reads a local filesystem, or needs a repo.
+58 skills served by the gbrain MCP bridge to hosted surfaces (claude.ai,
+ChatGPT, Grok). All are methodology, not local mechanics: none needs a Mac, a CLI,
+or a repo checkout. Where a skill names a brain operation (search, query, put_page,
+recall, synthesize), call the MCP tool of that name on THIS server.
 
-Call `list_skills` to see the catalog, `get_skill(name)` to read one in full.
+`list_skills` shows this catalog. `get_skill(name)` returns one in full.
 Reach for a skill when the situation matches. Do not wait to be asked.
 
-## Always-on (every message)
+## Knowledge base
 
 | Trigger | Skill |
 |---------|-------|
-| Processing ANY fetched page, transcript, email, or document you did not write | `skills/untrusted-content/SKILL.md` |
-| About to state a conclusion, finding, or confidence level | `skills/calibration/SKILL.md` |
+| academic verify | `skills/academic-verify/SKILL.md` |
+| brain ops | `skills/brain-ops/SKILL.md` |
+| citation discipline | `skills/citation-discipline/SKILL.md` |
+| concept synthesis | `skills/concept-synthesis/SKILL.md` |
+| document generate | `skills/document-generate/SKILL.md` |
+| enrich | `skills/enrich/SKILL.md` |
+| filing rules | `skills/filing-rules/SKILL.md` |
+| idea lineage | `skills/idea-lineage/SKILL.md` |
+| kb query | `skills/kb-query/SKILL.md` |
+| link discipline | `skills/link-discipline/SKILL.md` |
+| repo architecture | `skills/repo-architecture/SKILL.md` |
+| salience and recency | `skills/salience-and-recency/SKILL.md` |
+| taxonomist | `skills/taxonomist/SKILL.md` |
+| teach me | `skills/teach/SKILL.md` |
 
-## Before you call it done
-
-| Trigger | Skill |
-|---------|-------|
-| About to say something is done, fixed, working, or passing | `skills/quality-bar/SKILL.md` |
-| Trusting a green check, a passing gate, or an exit 0 | `skills/gate-actually-ran/SKILL.md` |
-| "ship gate", "are we ready to ship", "before we go live", "lift the gate" | `skills/ship-gate/SKILL.md` |
-| "persona QA", "walk the flow as a user", founder walkthrough of a live flow | `skills/persona-qa/SKILL.md` |
-
-## Before you act
-
-| Trigger | Skill |
-|---------|-------|
-| Tempted to interrupt the human with a question | `skills/resolve-before-asking/SKILL.md` |
-| Proposing a performance, cost, or quality fix; "optimize", "speed up", "make it cheaper" | `skills/measure-before-you-fix/SKILL.md` |
-| About to run a change across many items: batch edit, migration, mass rename, bulk API call | `skills/test-before-bulk/SKILL.md` |
-| Writing to state that another process, agent, or job also writes | `skills/sole-mutator-fencing/SKILL.md` |
-| Rotating a password, API key, token, or any shared secret | `skills/credential-rotation-runbook/SKILL.md` |
-
-## Facts and corrections
+## Always-on discipline
 
 | Trigger | Skill |
 |---------|-------|
-| "fact check", "verify the claims", publishing anything factual | `skills/fact-check/SKILL.md` |
-| A fact turned out to be wrong and other things depend on it | `skills/correction-pipeline/SKILL.md` |
+| calibration | `skills/calibration/SKILL.md` |
+| credential rotation | `skills/credential-rotation-runbook/SKILL.md` |
+| did the gate run | `skills/gate-actually-ran/SKILL.md` |
+| measure before you fix | `skills/measure-before-you-fix/SKILL.md` |
+| quality bar | `skills/quality-bar/SKILL.md` |
+| resolve before asking | `skills/resolve-before-asking/SKILL.md` |
+| sole mutator | `skills/sole-mutator-fencing/SKILL.md` |
+| test before bulk | `skills/test-before-bulk/SKILL.md` |
+| untrusted content | `skills/untrusted-content/SKILL.md` |
+
+## Research and verification
+
+| Trigger | Skill |
+|---------|-------|
+| code review checklist | `skills/code-review-checklist/SKILL.md` |
+| correction pipeline | `skills/correction-pipeline/SKILL.md` |
+| data research | `skills/data-research/SKILL.md` |
+| design critique | `skills/design-critique/SKILL.md` |
+| draft in voice | `skills/draft-in-voice/SKILL.md` |
+| fact check | `skills/fact-check/SKILL.md` |
+| research compendium | `skills/research-compendium/SKILL.md` |
+| strategic reading | `skills/strategic-reading/SKILL.md` |
+| two tier extraction | `skills/two-tier-extraction/SKILL.md` |
+
+## Review and shipping
+
+| Trigger | Skill |
+|---------|-------|
+| copy humanizer | `skills/copy-humanizer/SKILL.md` |
+| cross model review | `skills/cross-model-review/SKILL.md` |
+| distribution audit | `skills/distribution-audit/SKILL.md` |
+| engineering retro | `skills/engineering-retro/SKILL.md` |
+| investigate | `skills/investigate/SKILL.md` |
+| monetization audit | `skills/monetization-audit/SKILL.md` |
+| persona qa | `skills/persona-qa/SKILL.md` |
+| plan ceo review | `skills/plan-ceo-review/SKILL.md` |
+| plan design review | `skills/plan-design-review/SKILL.md` |
+| plan devex review | `skills/plan-devex-review/SKILL.md` |
+| plan eng review | `skills/plan-eng-review/SKILL.md` |
+| regex discipline | `skills/regex-discipline/SKILL.md` |
+| ship gate | `skills/ship-gate/SKILL.md` |
+| site cordon | `skills/site-cordon/SKILL.md` |
+| skill optimizer | `skills/skill-optimizer/SKILL.md` |
+| soul audit | `skills/soul-audit/SKILL.md` |
+
+## Making things
+
+| Trigger | Skill |
+|---------|-------|
+| design consultation | `skills/design-consultation/SKILL.md` |
+| office hours | `skills/office-hours/SKILL.md` |
+| skill creator | `skills/skill-creator/SKILL.md` |
+| spec | `skills/spec/SKILL.md` |
 
 ## Thinking with the user
 
 | Trigger | Skill |
 |---------|-------|
-| "grill me", "stress-test this", "poke holes in this", "challenge my thinking" | `skills/grilling/SKILL.md` |
-| "wait what", "that did not land", "re-pitch that", "I do not follow" | `skills/wait-what/SKILL.md` |
-| "turn this into a questionnaire", a decision needing someone else's input | `skills/to-questionnaire/SKILL.md` |
-| "teach me", "explain this concept", "walk me through how X works" | `skills/teach/SKILL.md` |
+| grill me | `skills/grilling/SKILL.md` |
+| prompting other models | `skills/prompting-other-models/SKILL.md` |
+| search modes | `skills/search-modes/SKILL.md` |
+| signal detector | `skills/signal-detector/SKILL.md` |
+| turn this into a questionnaire | `skills/to-questionnaire/SKILL.md` |
+| wait what | `skills/wait-what/SKILL.md` |

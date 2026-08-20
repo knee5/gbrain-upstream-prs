@@ -1,0 +1,7 @@
+{"intent": "persona qa", "expected_skill": "persona-qa"}
+{"intent": "approving a ship", "expected_skill": "persona-qa"}
+{"intent": "after a material fix", "expected_skill": "persona-qa"}
+{"intent": "help me with persona qa", "expected_skill": "persona-qa"}
+{"intent": "run the persona qa process", "expected_skill": "persona-qa"}
+{"intent": "walk a deployed flow as a realistic user with real context and critique it by outcome, not by whether the butt", "expected_skill": "persona-qa"}
+{"intent": "how do I approach persona qa", "expected_skill": "persona-qa"}

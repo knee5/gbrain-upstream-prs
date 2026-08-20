@@ -1,0 +1,8 @@
+{"intent": "plan devex review", "expected_skill": "plan-devex-review"}
+{"intent": "audit the developer experience of a tool, api, or sdk", "expected_skill": "plan-devex-review"}
+{"intent": "personas", "expected_skill": "plan-devex-review"}
+{"intent": "time-to-hello-world", "expected_skill": "plan-devex-review"}
+{"intent": "the seven dx characteristics", "expected_skill": "plan-devex-review"}
+{"intent": "and a 0-10 scoring rubric", "expected_skill": "plan-devex-review"}
+{"intent": "help me with plan devex review", "expected_skill": "plan-devex-review"}
+{"intent": "run the plan devex review process", "expected_skill": "plan-devex-review"}

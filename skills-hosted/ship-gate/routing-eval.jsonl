@@ -1,0 +1,8 @@
+{"intent": "ship gate", "expected_skill": "ship-gate"}
+{"intent": "the checklist that must pass before anything goes live", "expected_skill": "ship-gate"}
+{"intent": "what evidence counts as verified", "expected_skill": "ship-gate"}
+{"intent": "what a green check must actually prove", "expected_skill": "ship-gate"}
+{"intent": "and what blocks a ship", "expected_skill": "ship-gate"}
+{"intent": "help me with ship gate", "expected_skill": "ship-gate"}
+{"intent": "run the ship gate process", "expected_skill": "ship-gate"}
+{"intent": "the checklist that must pass before anything goes live: what evidence counts as verified, what a green check m", "expected_skill": "ship-gate"}

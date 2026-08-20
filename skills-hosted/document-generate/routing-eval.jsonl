@@ -1,0 +1,8 @@
+{"intent": "document generate", "expected_skill": "document-generate"}
+{"intent": "write documentation from scratch using the diataxis framework", "expected_skill": "document-generate"}
+{"intent": "partition into tutorial", "expected_skill": "document-generate"}
+{"intent": "reference", "expected_skill": "document-generate"}
+{"intent": "and explanation", "expected_skill": "document-generate"}
+{"intent": "then write each to its own standard with cross-links", "expected_skill": "document-generate"}
+{"intent": "help me with document generate", "expected_skill": "document-generate"}
+{"intent": "run the document generate process", "expected_skill": "document-generate"}

@@ -1,0 +1,5 @@
+{"intent": "concept synthesis", "expected_skill": "concept-synthesis"}
+{"intent": "help me with concept synthesis", "expected_skill": "concept-synthesis"}
+{"intent": "run the concept synthesis process", "expected_skill": "concept-synthesis"}
+{"intent": "turn scattered mentions of an idea across many sources into one durable concept page with a definition, the st", "expected_skill": "concept-synthesis"}
+{"intent": "how do I approach concept synthesis", "expected_skill": "concept-synthesis"}

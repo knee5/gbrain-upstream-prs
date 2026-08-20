@@ -1,0 +1,8 @@
+{"intent": "strategic reading", "expected_skill": "strategic-reading"}
+{"intent": "read long material for decision value rather than completeness", "expected_skill": "strategic-reading"}
+{"intent": "decide depth up front", "expected_skill": "strategic-reading"}
+{"intent": "extract only what changes an action", "expected_skill": "strategic-reading"}
+{"intent": "and record what you deliberately skipped", "expected_skill": "strategic-reading"}
+{"intent": "help me with strategic reading", "expected_skill": "strategic-reading"}
+{"intent": "run the strategic reading process", "expected_skill": "strategic-reading"}
+{"intent": "read long material for decision value rather than completeness: decide depth up front, extract only what chang", "expected_skill": "strategic-reading"}

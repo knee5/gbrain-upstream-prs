@@ -1,0 +1,8 @@
+{"intent": "regex discipline", "expected_skill": "regex-discipline"}
+{"intent": "applying a regex at scale", "expected_skill": "regex-discipline"}
+{"intent": "write and review regular expressions safely", "expected_skill": "regex-discipline"}
+{"intent": "test against real data first", "expected_skill": "regex-discipline"}
+{"intent": "avoid catastrophic backtracking", "expected_skill": "regex-discipline"}
+{"intent": "and prefer a parser when the input is structured", "expected_skill": "regex-discipline"}
+{"intent": "help me with regex discipline", "expected_skill": "regex-discipline"}
+{"intent": "run the regex discipline process", "expected_skill": "regex-discipline"}

@@ -1,0 +1,8 @@
+{"intent": "calibration", "expected_skill": "calibration"}
+{"intent": "state confidence honestly", "expected_skill": "calibration"}
+{"intent": "separate what you verified from what you inferred", "expected_skill": "calibration"}
+{"intent": "avoid false precision", "expected_skill": "calibration"}
+{"intent": "and say plainly when you do not know", "expected_skill": "calibration"}
+{"intent": "help me with calibration", "expected_skill": "calibration"}
+{"intent": "run the calibration process", "expected_skill": "calibration"}
+{"intent": "state confidence honestly: separate what you verified from what you inferred, avoid false precision, and say p", "expected_skill": "calibration"}

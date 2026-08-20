@@ -1,0 +1,8 @@
+{"intent": "idea lineage", "expected_skill": "idea-lineage"}
+{"intent": "trace where an idea came from and how it changed", "expected_skill": "idea-lineage"}
+{"intent": "link a claim back to its origin", "expected_skill": "idea-lineage"}
+{"intent": "record who influenced it", "expected_skill": "idea-lineage"}
+{"intent": "and detect when an idea has quietly drifted from its source", "expected_skill": "idea-lineage"}
+{"intent": "help me with idea lineage", "expected_skill": "idea-lineage"}
+{"intent": "run the idea lineage process", "expected_skill": "idea-lineage"}
+{"intent": "trace where an idea came from and how it changed: link a claim back to its origin, record who influenced it, a", "expected_skill": "idea-lineage"}

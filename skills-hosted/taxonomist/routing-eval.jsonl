@@ -1,0 +1,8 @@
+{"intent": "taxonomist", "expected_skill": "taxonomist"}
+{"intent": "design and maintain the tag and category system for a knowledge base", "expected_skill": "taxonomist"}
+{"intent": "keep the vocabulary small", "expected_skill": "taxonomist"}
+{"intent": "merge near-duplicates", "expected_skill": "taxonomist"}
+{"intent": "and prevent tag sprawl", "expected_skill": "taxonomist"}
+{"intent": "help me with taxonomist", "expected_skill": "taxonomist"}
+{"intent": "run the taxonomist process", "expected_skill": "taxonomist"}
+{"intent": "design and maintain the tag and category system for a knowledge base: keep the vocabulary small, merge near-du", "expected_skill": "taxonomist"}

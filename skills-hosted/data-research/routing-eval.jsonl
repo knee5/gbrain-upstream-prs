@@ -1,0 +1,8 @@
+{"intent": "data research", "expected_skill": "data-research"}
+{"intent": "turn unstructured sources into a maintained structured tracker", "expected_skill": "data-research"}
+{"intent": "extract fields", "expected_skill": "data-research"}
+{"intent": "archive the raw source", "expected_skill": "data-research"}
+{"intent": "deduplicate against what you already have", "expected_skill": "data-research"}
+{"intent": "help me with data research", "expected_skill": "data-research"}
+{"intent": "run the data research process", "expected_skill": "data-research"}
+{"intent": "turn unstructured sources into a maintained structured tracker: search, extract fields, archive the raw source", "expected_skill": "data-research"}

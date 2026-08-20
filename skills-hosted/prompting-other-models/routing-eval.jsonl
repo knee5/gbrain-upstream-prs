@@ -1,0 +1,8 @@
+{"intent": "prompting other models", "expected_skill": "prompting-other-models"}
+{"intent": "how to write a prompt when handing work to a different model or agent", "expected_skill": "prompting-other-models"}
+{"intent": "what context must be restated", "expected_skill": "prompting-other-models"}
+{"intent": "how to bound the task", "expected_skill": "prompting-other-models"}
+{"intent": "and the failure modes of cross-model handoff", "expected_skill": "prompting-other-models"}
+{"intent": "help me with prompting other models", "expected_skill": "prompting-other-models"}
+{"intent": "run the prompting other models process", "expected_skill": "prompting-other-models"}
+{"intent": "how to write a prompt when handing work to a different model or agent: what context must be restated, how to b", "expected_skill": "prompting-other-models"}

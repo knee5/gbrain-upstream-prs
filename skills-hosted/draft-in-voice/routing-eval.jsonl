@@ -1,0 +1,8 @@
+{"intent": "draft in voice", "expected_skill": "draft-in-voice"}
+{"intent": "draft prose that sounds like the specific person it is for", "expected_skill": "draft-in-voice"}
+{"intent": "extract a voice profile from their prior writing", "expected_skill": "draft-in-voice"}
+{"intent": "then write to it and check the draft against it", "expected_skill": "draft-in-voice"}
+{"intent": "help me with draft in voice", "expected_skill": "draft-in-voice"}
+{"intent": "run the draft in voice process", "expected_skill": "draft-in-voice"}
+{"intent": "draft prose that sounds like the specific person it is for: extract a voice profile from their prior writing, ", "expected_skill": "draft-in-voice"}
+{"intent": "how do I approach draft in voice", "expected_skill": "draft-in-voice"}

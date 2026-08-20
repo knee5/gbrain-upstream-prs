@@ -1,0 +1,5 @@
+{"intent": "spec", "expected_skill": "spec"}
+{"intent": "help me with spec", "expected_skill": "spec"}
+{"intent": "run the spec process", "expected_skill": "spec"}
+{"intent": "turn vague intent into a precise, executable spec in phases, with issue quality standards and templates for co", "expected_skill": "spec"}
+{"intent": "how do I approach spec", "expected_skill": "spec"}

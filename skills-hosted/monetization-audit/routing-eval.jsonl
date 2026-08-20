@@ -1,0 +1,7 @@
+{"intent": "monetization audit", "expected_skill": "monetization-audit"}
+{"intent": "pricing decision", "expected_skill": "monetization-audit"}
+{"intent": "as a pre-launch gate", "expected_skill": "monetization-audit"}
+{"intent": "help me with monetization audit", "expected_skill": "monetization-audit"}
+{"intent": "run the monetization audit process", "expected_skill": "monetization-audit"}
+{"intent": "run a product through a repeatable paywall, pricing, and conversion checklist and produce a scored audit with ", "expected_skill": "monetization-audit"}
+{"intent": "how do I approach monetization audit", "expected_skill": "monetization-audit"}

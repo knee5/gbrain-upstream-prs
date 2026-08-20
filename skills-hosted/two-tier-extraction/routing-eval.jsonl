@@ -1,0 +1,8 @@
+{"intent": "two tier extraction", "expected_skill": "two-tier-extraction"}
+{"intent": "long transcripts", "expected_skill": "two-tier-extraction"}
+{"intent": "email threads", "expected_skill": "two-tier-extraction"}
+{"intent": "extract structured information from long documents in two passes", "expected_skill": "two-tier-extraction"}
+{"intent": "a fast skim for structure and entities", "expected_skill": "two-tier-extraction"}
+{"intent": "then a deep pass only where it pays", "expected_skill": "two-tier-extraction"}
+{"intent": "help me with two tier extraction", "expected_skill": "two-tier-extraction"}
+{"intent": "run the two tier extraction process", "expected_skill": "two-tier-extraction"}

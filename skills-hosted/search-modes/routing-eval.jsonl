@@ -1,0 +1,8 @@
+{"intent": "search modes", "expected_skill": "search-modes"}
+{"intent": "searching a corpus", "expected_skill": "search-modes"}
+{"intent": "choose the right retrieval mode for a question", "expected_skill": "search-modes"}
+{"intent": "exact keyword lookup", "expected_skill": "search-modes"}
+{"intent": "semantic similarity", "expected_skill": "search-modes"}
+{"intent": "or structured filter", "expected_skill": "search-modes"}
+{"intent": "help me with search modes", "expected_skill": "search-modes"}
+{"intent": "run the search modes process", "expected_skill": "search-modes"}

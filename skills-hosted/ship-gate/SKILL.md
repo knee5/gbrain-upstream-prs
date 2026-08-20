@@ -1,19 +1,19 @@
 ---
 name: ship-gate
-description: Use BEFORE enabling any feature flag publicly or lifting a site gate — live persona pass + silent-fallback audit + copy sweep + deep-link matrix.
+description: "The checklist that must pass before anything goes live: what evidence counts as verified, what a green check must actually prove, and what blocks a ship"
 triggers:
-- ship gate
-- are we ready to ship
-- before we go live
-- lift the gate
-- enable the flag publicly
+  - "ship gate"
+  - "the checklist that must pass before anything goes live"
+  - "what evidence counts as verified"
+  - "what a green check must actually prove"
+  - "and what blocks a ship"
 ---
 
 # ship-gate
 
 Treat merge/deploy and public exposure as separate gates. Depend on
-[`persona-qa`](../persona-qa/SKILL.md) for the live journey receipt and
-[`site-cordon`](../site-cordon/SKILL.md) to preserve production QA access.
+the `persona-qa` skill for the live journey receipt and
+the `site-cordon` skill to preserve production QA access.
 
 ## Release rule
 
@@ -116,4 +116,11 @@ Whatever bot posts findings, authoring agents must TRIAGE, never blindly apply (
 
 ## Proof-of-fire receipt (MANDATORY — adopted 2026-07-28, wiring-audit F8)
 
-A run of this gate that leaves no artifact did not happen. Before reporting your verdict, write a dated scorecard to `~/kb/scratch/gate-receipts/YYYY-MM-DD-<surface>-<skill-name>.md` containing: what was gated (commit/PR/deploy/copy reference), the verdict (and score where this skill scores), the specific findings/hits, and who ran it (agent/session). Commit the receipt to kb (add ONLY your file, never `git add -A`). The Friday retro counts ships against receipts; a ship without a matching receipt is a violation. This section exists because these gates showed zero recorded invocations across a period that included shipping the landing page.
+A run of this gate that leaves no artifact did not happen. Before reporting your verdict, write a dated scorecard to `your working notes folder/gate-receipts/YYYY-MM-DD-<surface>-<skill-name>.md` containing: what was gated (commit/PR/deploy/copy reference), the verdict (and score where this skill scores), the specific findings/hits, and who ran it (agent/session). Commit the receipt to kb (add ONLY your file, never `git add -A`). The Friday retro counts ships against receipts; a ship without a matching receipt is a violation. This section exists because these gates showed zero recorded invocations across a period that included shipping the landing page.
+
+
+---
+
+## Portability note
+
+This skill was adapted from a local agent setup for use in a hosted assistant. Machine-specific machinery (shell preambles, local CLIs, scheduled-job wiring, file paths on a personal laptop) has been removed; the methodology is intact. Where a step refers to a connected knowledge base or a repository, use whatever equivalent you have in this conversation — uploaded files, project memory, or what the user pastes in. If a step is impossible here, say so and continue with the rest rather than inventing output.

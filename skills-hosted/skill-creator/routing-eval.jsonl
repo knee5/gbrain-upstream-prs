@@ -1,0 +1,8 @@
+{"intent": "skill creator", "expected_skill": "skill-creator"}
+{"intent": "how to write a new agent skill that actually gets invoked", "expected_skill": "skill-creator"}
+{"intent": "description-as-router", "expected_skill": "skill-creator"}
+{"intent": "and the failure modes that make skills dead weight", "expected_skill": "skill-creator"}
+{"intent": "help me with skill creator", "expected_skill": "skill-creator"}
+{"intent": "run the skill creator process", "expected_skill": "skill-creator"}
+{"intent": "how to write a new agent skill that actually gets invoked: naming, description-as-router, scope, and the failu", "expected_skill": "skill-creator"}
+{"intent": "how do I approach skill creator", "expected_skill": "skill-creator"}

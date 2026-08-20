@@ -1,0 +1,8 @@
+{"intent": "plan eng review", "expected_skill": "plan-eng-review"}
+{"intent": "engineering-manager review of a plan", "expected_skill": "plan-eng-review"}
+{"intent": "architecture", "expected_skill": "plan-eng-review"}
+{"intent": "sequencing", "expected_skill": "plan-eng-review"}
+{"intent": "and what will actually break", "expected_skill": "plan-eng-review"}
+{"intent": "help me with plan eng review", "expected_skill": "plan-eng-review"}
+{"intent": "run the plan eng review process", "expected_skill": "plan-eng-review"}
+{"intent": "engineering-manager review of a plan: architecture, sequencing, risk, and what will actually break", "expected_skill": "plan-eng-review"}

@@ -1,0 +1,5 @@
+{"intent": "skill optimizer", "expected_skill": "skill-optimizer"}
+{"intent": "help me with skill optimizer", "expected_skill": "skill-optimizer"}
+{"intent": "run the skill optimizer process", "expected_skill": "skill-optimizer"}
+{"intent": "audit an existing skill for bloat, bad triggers, and drift; tighten it so it fires when it should and stays ou", "expected_skill": "skill-optimizer"}
+{"intent": "how do I approach skill optimizer", "expected_skill": "skill-optimizer"}

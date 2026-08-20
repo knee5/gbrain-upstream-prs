@@ -1,0 +1,8 @@
+{"intent": "plan design review", "expected_skill": "plan-design-review"}
+{"intent": "designer's review of a plan", "expected_skill": "plan-design-review"}
+{"intent": "rates each design dimension 0-10", "expected_skill": "plan-design-review"}
+{"intent": "says what would make it a 10", "expected_skill": "plan-design-review"}
+{"intent": "and names the cheapest move that raises the score most", "expected_skill": "plan-design-review"}
+{"intent": "help me with plan design review", "expected_skill": "plan-design-review"}
+{"intent": "run the plan design review process", "expected_skill": "plan-design-review"}
+{"intent": "designer's review of a plan: rates each design dimension 0-10, says what would make it a 10, and names the che", "expected_skill": "plan-design-review"}

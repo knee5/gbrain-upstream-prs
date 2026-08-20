@@ -6,7 +6,6 @@ triggers:
 - that didn't land
 - re-pitch that
 - I don't follow
-- say that again simply
 disable-model-invocation: true
 ---
 

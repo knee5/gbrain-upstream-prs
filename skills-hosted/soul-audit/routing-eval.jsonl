@@ -1,0 +1,7 @@
+{"intent": "soul audit", "expected_skill": "soul-audit"}
+{"intent": "review points", "expected_skill": "soul-audit"}
+{"intent": "before adding more", "expected_skill": "soul-audit"}
+{"intent": "help me with soul audit", "expected_skill": "soul-audit"}
+{"intent": "run the soul audit process", "expected_skill": "soul-audit"}
+{"intent": "check whether a system, product, or process still serves its original purpose, or has drifted into serving its", "expected_skill": "soul-audit"}
+{"intent": "how do I approach soul audit", "expected_skill": "soul-audit"}

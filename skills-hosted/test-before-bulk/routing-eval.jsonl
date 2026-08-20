@@ -1,0 +1,8 @@
+{"intent": "test before bulk", "expected_skill": "test-before-bulk"}
+{"intent": "batch edit", "expected_skill": "test-before-bulk"}
+{"intent": "migration", "expected_skill": "test-before-bulk"}
+{"intent": "mass rename", "expected_skill": "test-before-bulk"}
+{"intent": "bulk api call", "expected_skill": "test-before-bulk"}
+{"intent": "help me with test before bulk", "expected_skill": "test-before-bulk"}
+{"intent": "run the test before bulk process", "expected_skill": "test-before-bulk"}
+{"intent": "never run a transformation across many items before proving it on a small sample and checking the output by ha", "expected_skill": "test-before-bulk"}
