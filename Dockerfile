@@ -25,6 +25,11 @@ WORKDIR /app
 COPY --from=builder /app/bin/gbrain /app/bin/gbrain
 COPY --from=builder /app/admin/dist /app/admin/dist
 
+# Hosted skill catalog served to claude.ai / ChatGPT / Grok via list_skills.
+# From the BUILD CONTEXT (not the builder stage). Requires the matching
+# !skills-hosted negation in .dockerignore or these dirs arrive empty.
+COPY skills-hosted /app/skills
+
 # Tighter exec context — gbrain expects to find admin/dist relative to cwd
 ENV PATH="/app/bin:${PATH}"
 

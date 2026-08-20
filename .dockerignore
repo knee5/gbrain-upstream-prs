@@ -7,6 +7,11 @@ admin/.next
 test
 docs
 *.md
+# ...but the hosted skill catalog IS shipped. Docker matches *.md at every
+# directory level, so without this negation every SKILL.md is stripped from
+# the build context and the server serves an EMPTY catalog with a clean build.
+!skills-hosted/**/*.md
+!skills-hosted/*.md
 .git
 .github
 .gitignore

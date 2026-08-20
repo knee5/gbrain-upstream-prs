@@ -9,6 +9,7 @@ primary_region = "sjc"
   dockerfile = "Dockerfile"
 
 [env]
+  GBRAIN_SKILLS_DIR = "/app/skills"
   PORT = "3131"
   # Express `trust proxy = 1`: take the hop Fly appended to X-Forwarded-For as the
   # client IP, so the pre-auth rate limiter buckets per caller instead of collapsing
