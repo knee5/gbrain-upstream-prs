@@ -1887,6 +1887,10 @@ export class PostgresEngine implements BrainEngine {
   // list_pages etc. see zero breaking changes. A2 two-pass (Layer 7)
   // consumes searchKeywordChunks for the raw chunk-grain primitive.
   async searchKeyword(query: string, opts?: SearchOpts): Promise<SearchResult[]> {
+    // Recall backstop: bound the relaxed candidate set so Postgres cannot
+    // sequentially scan the whole table. Sampling is acceptable because this
+    // fallback runs only after strict AND returns no rows.
+    const OR_FALLBACK_CANDIDATE_LIMIT = 8_000;
     const limit = clampSearchLimit(opts?.limit);
     const offset = opts?.offset || 0;
     const type = opts?.type;
@@ -1988,8 +1992,8 @@ export class PostgresEngine implements BrainEngine {
     // — safe to interpolate into raw SQL.
     const ftsLang = getFtsLanguage();
 
-    const rawQuery = `
-      WITH ranked_chunks AS (
+    const buildKeywordRawQuery = (leadingCtes = '', orCandidateClause = '') => `
+      WITH ${leadingCtes}ranked_chunks AS (
         SELECT
           p.slug, p.id as page_id, p.title, p.type, p.source_id,
           p.effective_date, p.effective_date_source,
@@ -2017,7 +2021,7 @@ export class PostgresEngine implements BrainEngine {
           -- v0.27.1: hide image rows from text-keyword search so OCR text
           -- doesn't drown text-page hits. Image search runs a separate
           -- vector path on embedding_image.
-          AND cc.modality = 'text'
+          AND cc.modality = 'text'${orCandidateClause}
         ORDER BY score DESC
         LIMIT ${innerLimitParam}
       ),
@@ -2032,6 +2036,18 @@ export class PostgresEngine implements BrainEngine {
       LIMIT ${limitParam}
       OFFSET ${offsetParam}
     `;
+    const rawQuery = buildKeywordRawQuery();
+    const orFallbackRawQuery = buildKeywordRawQuery(
+      `or_cand AS MATERIALIZED (
+        SELECT cc2.id FROM content_chunks cc2
+        WHERE cc2.search_vector @@ websearch_to_tsquery('${ftsLang}', $1)
+          AND cc2.modality = 'text'
+        LIMIT ${OR_FALLBACK_CANDIDATE_LIMIT}
+      ),
+      `,
+      `
+          AND cc.id IN (SELECT id FROM or_cand)`,
+    );
 
     // RLS scope binding (opt-in via GBRAIN_RLS_SCOPE_BINDING) + search-only
     // timeout. alwaysTransaction: this method needed sql.begin() on master
@@ -2039,12 +2055,12 @@ export class PostgresEngine implements BrainEngine {
     // the GUC can never leak onto a pooled connection). Flag off → the
     // wrap is identical to master's; flag on → set_config('app.scopes')
     // shares the same transaction as the timeout.
-    const runKeyword = (queryText: string) =>
+    const runKeyword = (queryText: string, queryTemplate = rawQuery) =>
       this.withScopedReadTransaction(opts?.sourceIds, opts?.sourceId, async (tx) => {
         await tx`SET LOCAL statement_timeout = '15s'`;
         const boundParams = [...params];
         boundParams[0] = queryText;
-        return await tx.unsafe(rawQuery, boundParams as Parameters<typeof tx.unsafe>[1]);
+        return await tx.unsafe(queryTemplate, boundParams as Parameters<typeof tx.unsafe>[1]);
       }, { alwaysTransaction: true });
     let rows = await runKeyword(query);
     // D2 fix (fix/title-retrieval-arm): websearch AND semantics at chunk
@@ -2058,7 +2074,7 @@ export class PostgresEngine implements BrainEngine {
     // link-extraction, eval) keep the strict-AND contract.
     if (rows.length === 0 && opts?.orFallback) {
       const orQuery = buildOrFallbackWebsearchQuery(query);
-      if (orQuery) rows = await runKeyword(orQuery);
+      if (orQuery) rows = await runKeyword(orQuery, orFallbackRawQuery);
     }
     return rows.map(rowToSearchResult);
   }
