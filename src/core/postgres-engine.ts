@@ -2041,7 +2041,7 @@ export class PostgresEngine implements BrainEngine {
     // shares the same transaction as the timeout.
     const runKeyword = (queryText: string) =>
       this.withScopedReadTransaction(opts?.sourceIds, opts?.sourceId, async (tx) => {
-        await tx`SET LOCAL statement_timeout = '8s'`;
+        await tx`SET LOCAL statement_timeout = '15s'`;
         const boundParams = [...params];
         boundParams[0] = queryText;
         return await tx.unsafe(rawQuery, boundParams as Parameters<typeof tx.unsafe>[1]);
@@ -2187,7 +2187,7 @@ export class PostgresEngine implements BrainEngine {
     // same scoped wrapper.
     const runTitles = (queryText: string) =>
       this.withScopedReadTransaction(opts?.sourceIds, opts?.sourceId, async (tx) => {
-        await tx`SET LOCAL statement_timeout = '8s'`;
+        await tx`SET LOCAL statement_timeout = '15s'`;
         const boundParams = [...params];
         boundParams[0] = queryText;
         return await tx.unsafe(rawQuery, boundParams as Parameters<typeof tx.unsafe>[1]);
@@ -2327,7 +2327,7 @@ export class PostgresEngine implements BrainEngine {
     // already wrapped this in sql.begin() for the SET LOCAL; flag off is
     // identical to that wrap, flag on adds set_config in the same tx.
     const rows = await this.withScopedReadTransaction(opts?.sourceIds, opts?.sourceId, async (tx) => {
-      await tx`SET LOCAL statement_timeout = '8s'`;
+      await tx`SET LOCAL statement_timeout = '15s'`;
       return await tx.unsafe(rawQuery, params as Parameters<typeof tx.unsafe>[1]);
     }, { alwaysTransaction: true });
     return rows.map(rowToSearchResult);
@@ -2541,7 +2541,7 @@ export class PostgresEngine implements BrainEngine {
     // pagination) but never emits: pool state is unknowable there.
     const runOnce = async (il: number) =>
       await this.withScopedReadTransaction(opts?.sourceIds, opts?.sourceId, async (tx) => {
-        await tx`SET LOCAL statement_timeout = '8s'`;
+        await tx`SET LOCAL statement_timeout = '15s'`;
         await tx`SELECT set_config('hnsw.ef_search', ${String(hnswEfSearchFor(il))}, true)`;
         return await tx.unsafe(rawQuery, params as Parameters<typeof tx.unsafe>[1]);
       }, { alwaysTransaction: true });
