@@ -62,18 +62,18 @@ export async function setEmotionalWeightBatch(deps: PgliteSalienceDeps, rows: Em
     const weights = rows.map(r => r.weight);
     // Composite-keyed UPDATE FROM unnest (codex C4#3).
     // v0.29.1: bump salience_touched_at when emotional_weight actually changes
-    // so the salience query window picks up newly-salient old pages. Mirror
-    // of postgres-engine.ts.
+    // so the salience query window picks up newly-salient old pages. The
+    // IS DISTINCT FROM guard in the WHERE clause keeps no-op writes out
+    // entirely, so the count is rows actually changed. Mirror of
+    // postgres-engine.ts.
     const result = await deps.db.query(
       `UPDATE pages
           SET emotional_weight = u.weight,
-              salience_touched_at = CASE
-                WHEN pages.emotional_weight IS DISTINCT FROM u.weight THEN now()
-                ELSE pages.salience_touched_at
-              END
+              salience_touched_at = now()
          FROM unnest($1::text[], $2::text[], $3::real[])
            AS u(slug, source_id, weight)
         WHERE pages.slug = u.slug AND pages.source_id = u.source_id
+          AND pages.emotional_weight IS DISTINCT FROM u.weight
         RETURNING 1`,
       [slugs, sourceIds, weights]
     );

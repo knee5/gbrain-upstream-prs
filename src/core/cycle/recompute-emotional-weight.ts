@@ -91,9 +91,11 @@ export async function runPhaseRecomputeEmotionalWeight(
       }, start);
     }
 
+    // setEmotionalWeightBatch only admits rows whose weight actually changed,
+    // so `updated` is a count of changed pages, not of pages examined.
     const updated = await engine.setEmotionalWeightBatch(writes);
 
-    return result('ok', `recompute_emotional_weight (${updated} pages)`, updated, {
+    return result('ok', `recompute_emotional_weight (${updated} pages changed)`, updated, {
       mode: opts.affectedSlugs ? 'incremental' : 'full',
       pages_recomputed: updated,
     }, start);

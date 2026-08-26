@@ -71,7 +71,11 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(phaseResult).toBeDefined();
     expect(phaseResult!.status).toBe('ok');
     expect(phaseResult!.details.mode).toBe('full');
-    expect(Number(phaseResult!.details.pages_recomputed)).toBeGreaterThanOrEqual(2);
+    // pages_recomputed counts rows whose weight ACTUALLY CHANGED. Only the
+    // wedding page moves (0 -> 0.5); notes/random computes to 0 and the column
+    // already defaults to 0, so it is a no-op write and is not admitted. The
+    // per-page value assertions below are what prove the column is populated.
+    expect(Number(phaseResult!.details.pages_recomputed)).toBe(1);
 
     // Verify both pages got their weights populated.
     const wedding = await engine.executeRaw<{ emotional_weight: number }>(
@@ -84,7 +88,7 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(Number(random[0].emotional_weight)).toBe(0);
 
     // Totals roll up the new field.
-    expect(report.totals.pages_emotional_weight_recomputed).toBeGreaterThanOrEqual(2);
+    expect(report.totals.pages_emotional_weight_recomputed).toBe(1);
   });
 
   test('dry-run skips the UPDATE but reports a would-write count', async () => {
@@ -100,6 +104,8 @@ describe('v0.29 — recompute_emotional_weight phase runs end-to-end', () => {
     expect(phaseResult).toBeDefined();
     expect(phaseResult!.status).toBe('ok');
     expect(phaseResult!.details.dry_run).toBe(true);
+    // Dry-run reports the would-write count (every page examined), not the
+    // changed-row count, so both pages are still counted here.
     expect(Number(phaseResult!.details.pages_recomputed)).toBeGreaterThanOrEqual(2);
 
     // Sentinel survives because dry-run never writes.

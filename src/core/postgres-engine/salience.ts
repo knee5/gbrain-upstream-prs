@@ -91,18 +91,21 @@ export async function setEmotionalWeightBatch(deps: PgSalienceDeps, rows: Emotio
     // actually changes. The salience query window then includes the page in
     // GREATEST(updated_at, salience_touched_at) >= boundary, so a previously
     // calm page that just became salient surfaces in the recent salience
-    // results without a content edit. No-op writes (same weight) leave
-    // salience_touched_at alone — preserves "actual change" semantics.
+    // results without a content edit.
+    //
+    // The IS DISTINCT FROM guard lives in the WHERE clause, so a no-op write
+    // (same weight) is not admitted at all. This matters for cost: every
+    // admitted row fires bump_page_generation_trg and trg_pages_search_vector,
+    // and most recompute runs change almost nothing. RETURNING therefore
+    // counts rows that ACTUALLY CHANGED, not rows that matched.
     const result = await sql`
       UPDATE pages
          SET emotional_weight = u.weight,
-             salience_touched_at = CASE
-               WHEN pages.emotional_weight IS DISTINCT FROM u.weight THEN now()
-               ELSE pages.salience_touched_at
-             END
+             salience_touched_at = now()
         FROM unnest(${slugs}::text[], ${sourceIds}::text[], ${weights}::real[])
           AS u(slug, source_id, weight)
        WHERE pages.slug = u.slug AND pages.source_id = u.source_id
+         AND pages.emotional_weight IS DISTINCT FROM u.weight
       RETURNING 1
     `;
     return result.length;
