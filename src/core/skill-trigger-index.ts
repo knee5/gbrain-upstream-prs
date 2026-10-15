@@ -155,7 +155,7 @@ function loadFrontmatterEntries(skillsDir: string): SkillTriggerEntry[] {
  * directory (the OpenClaw workspace-root layout from v0.31.7). For each
  * file: parse via `parseResolverEntries` and stamp `source: 'resolver_md'`.
  */
-function loadResolverMdEntries(skillsDir: string): SkillTriggerEntry[] {
+export function loadResolverMdEntries(skillsDir: string): SkillTriggerEntry[] {
   const paths = [
     ...findAllResolverFiles(skillsDir),
     ...findAllResolverFiles(join(skillsDir, '..')),

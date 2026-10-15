@@ -1,4 +1,6 @@
 import { describe, test, expect } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import type { OperationContext } from '../src/core/operations.ts';
 import {
@@ -57,21 +59,37 @@ describe('buildSkillCatalog', () => {
   test('D7 usable/unavailable split honors caller scope', () => {
     const read = buildSkillCatalog(ctx(true, ['read']), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(read.usable_tools.sort()).toEqual(['query', 'search']);
+    expect(read.usable_tools!.sort()).toEqual(['query', 'search']);
     // put_page is write-scope (blocked for read), web_search isn't an op at all
-    expect(read.unavailable_tools.sort()).toEqual(['put_page', 'web_search']);
+    expect(read.unavailable_tools!.sort()).toEqual(['put_page', 'web_search']);
 
     const admin = buildSkillCatalog(ctx(true, ['admin']), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(admin.usable_tools.sort()).toEqual(['put_page', 'query', 'search']);
+    expect(admin.usable_tools!.sort()).toEqual(['put_page', 'query', 'search']);
     expect(admin.unavailable_tools).toEqual(['web_search']);
   });
 
   test('local caller (remote=false) can use any real op', () => {
     const local = buildSkillCatalog(ctx(false), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(local.usable_tools.sort()).toEqual(['put_page', 'query', 'search']);
+    expect(local.usable_tools!.sort()).toEqual(['put_page', 'query', 'search']);
     expect(local.unavailable_tools).toEqual(['web_search']); // still not an op
+  });
+
+  test('a RESOLVER.md section labels a skill whose row repeats a frontmatter trigger', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gbrain-skill-section-'));
+    try {
+      const skills = join(dir, 'skills');
+      mkdirSync(join(skills, 'portable'), { recursive: true });
+      writeFileSync(join(skills, 'portable', 'SKILL.md'), '---\nname: portable\ndescription: A portable skill\ntriggers:\n  - "portable work"\n  - "another phrase"\n---\n\nRead the brain.\n');
+      writeFileSync(join(skills, 'RESOLVER.md'), '# Resolver\n\n## Knowledge base\n\n| Trigger | Skill |\n|---|---|\n| portable work | `skills/portable/SKILL.md` |\n');
+      const skill = buildSkillCatalog(ctx(true, ['read']), skills, 'config').skills.find(s => s.name === 'portable')!;
+      expect(skill.section).toBe('Knowledge base');
+      expect(skill.triggers).toEqual(['portable work', 'another phrase']);
+      expect(buildSkillCatalog(ctx(true, ['read']), skills, 'config', { section: 'Knowledge base' }).skills.map(s => s.name)).toEqual(['portable']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('section filter narrows the result set', () => {

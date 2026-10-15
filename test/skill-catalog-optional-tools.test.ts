@@ -41,7 +41,8 @@ describe('published skill optional tool metadata', () => {
           const catalog = buildSkillCatalog(ctx, dir, 'config', { gateDisabled: new Set() });
           const detail = getSkillDetail(ctx, dir, 'portable', { gateDisabled: new Set() });
           const probes = ['search', 'put_page', 'put_skill'];
-          for (const inventory of [catalog.skills[0].usable_tools, catalog.instructions.available_brain_tools, detail.usable_tools, detail.client_guidance.available_brain_tools]) {
+          expect(catalog.skills[0]).not.toHaveProperty('usable_tools');
+          for (const inventory of [catalog.instructions.available_brain_tools, detail.usable_tools, detail.client_guidance.available_brain_tools]) {
             expect(probes.filter(name => inventory.includes(name))).toEqual(expectedTools);
           }
           expect(crossReferenceTools(probes, ctx, new Set())).toEqual({
@@ -102,9 +103,13 @@ describe('published skill optional tool metadata', () => {
       const detail = getSkillDetail(ctx, dir, 'portable');
       expect(skill).toBeDefined();
       expect(skill.tools).toEqual([]);
-      expect(skill.usable_tools).toEqual(inherits ? catalog.instructions.available_brain_tools : []);
-      expect(detail.usable_tools).toEqual(skill.usable_tools);
-      expect(skill.unavailable_tools).toEqual([]);
+      // The list omits an inheriting skill's tool lists; get_skill still returns them.
+      expect('usable_tools' in skill).toBe(!inherits);
+      expect('unavailable_tools' in skill).toBe(!inherits);
+      const listedUsable = skill.usable_tools ?? catalog.instructions.available_brain_tools;
+      expect(listedUsable).toEqual(inherits ? catalog.instructions.available_brain_tools : []);
+      expect(detail.usable_tools).toEqual(listedUsable);
+      if (!inherits) expect(skill.unavailable_tools).toEqual([]);
       expect(detail.unavailable_tools).toEqual([]);
       expect(detail.usable_tools).not.toContain('put_page');
       if (inherits) {
@@ -131,7 +136,8 @@ describe('published skill optional tool metadata', () => {
       const catalog = buildSkillCatalog(ctx, dir, 'config');
       const detail = getSkillDetail(ctx, dir, 'portable');
       expect(detail.usable_tools).toEqual(catalog.instructions.available_brain_tools);
-      expect(catalog.skills[0].usable_tools).toEqual(detail.usable_tools);
+      expect(catalog.skills[0]).not.toHaveProperty('usable_tools');
+      expect(catalog.skills[0]).not.toHaveProperty('unavailable_tools');
       expect(detail.usable_tools.includes('purge_deleted_pages')).toBe(context.remote === false);
       if (context.remote === false || 'transport' in context || context.auth.scopes.length > 0) {
         expect(detail.usable_tools).toContain('put_page');

@@ -47,7 +47,7 @@ import {
   type SkillsDirSource,
 } from './repo-root.ts';
 import { loadOrDeriveManifest, type ManifestEntry } from './skill-manifest.ts';
-import { loadSkillTriggerIndex, FRONTMATTER_SECTION } from './skill-trigger-index.ts';
+import { loadResolverMdEntries, loadSkillTriggerIndex, FRONTMATTER_SECTION } from './skill-trigger-index.ts';
 import { parseSkillFrontmatter } from './skill-frontmatter.ts';
 import { operationScopesAllowed } from './scope.ts';
 import { currentVerifiedLocalWriter } from './persistence/identity.ts';
@@ -91,10 +91,14 @@ export interface SkillCatalogEntry {
   section: string;
   triggers: string[];
   tools: string[];
-  /** declared tools ∩ (exposed by this server AND permitted to this caller). */
-  usable_tools: string[];
+  /**
+   * declared tools ∩ (exposed by this server AND permitted to this caller).
+   * Omitted (with `unavailable_tools`) when the skill declares no `tools:` and
+   * so inherits every tool in `instructions.available_brain_tools`.
+   */
+  usable_tools?: string[];
   /** declared tools − usable (not on this server, or beyond caller scope). */
-  unavailable_tools: string[];
+  unavailable_tools?: string[];
   writes_pages: boolean;
   mutating: boolean;
   /** #6471: present only when the call carried `query`; see `scoreSkillMatch`. */
@@ -360,17 +364,17 @@ function resolveSkillTools(
   parsed: ReturnType<typeof parseSkillFrontmatter>,
   ctx: OperationContext,
   gateDisabled?: ReadonlySet<string>,
-): { usable_tools: string[]; unavailable_tools: string[] } {
-  if (parsed?.tools !== undefined) return crossReferenceTools(parsed.tools, ctx, gateDisabled);
+): { usable_tools: string[]; unavailable_tools: string[]; inherits: boolean } {
+  if (parsed?.tools !== undefined) return { ...crossReferenceTools(parsed.tools, ctx, gateDisabled), inherits: false };
   if (parsed) {
     try {
       const data = load(parsed.raw, { schema: FAILSAFE_SCHEMA });
       if (data && typeof data === 'object' && !Array.isArray(data) && !Object.hasOwn(data, 'tools')) {
-        return { usable_tools: availableBrainTools(ctx, gateDisabled), unavailable_tools: [] };
+        return { usable_tools: availableBrainTools(ctx, gateDisabled), unavailable_tools: [], inherits: true };
       }
     } catch {}
   }
-  return { usable_tools: [], unavailable_tools: [] };
+  return { usable_tools: [], unavailable_tools: [], inherits: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +477,13 @@ function buildTriggerMap(skillsDir: string): Map<string, TriggerInfo> {
       info.section = e.section;
     }
   }
+  // The merged index keeps the frontmatter copy of a trigger that RESOLVER.md
+  // repeats, which drops that row's section. Read the resolver labels directly.
+  for (const e of loadResolverMdEntries(skillsDir)) {
+    const dir = e.isGStack || !e.section ? undefined : e.skillPath.match(/^skills\/([^/]+)\//)?.[1];
+    const info = dir ? map.get(dir) : undefined;
+    if (info?.section === FRONTMATTER_SECTION) info.section = e.section;
+  }
   return map;
 }
 
@@ -563,15 +574,16 @@ export function buildSkillCatalog(
     if (sectionFilter && section !== sectionFilter) continue;
 
     const tools = parsed?.tools ?? [];
-    const { usable_tools, unavailable_tools } = resolveSkillTools(parsed, ctx, opts.gateDisabled);
+    const { usable_tools, unavailable_tools, inherits } = resolveSkillTools(parsed, ctx, opts.gateDisabled);
     skills.push({
       name: entry.name,
       description: oneLineDescription(raw, body),
       section,
       triggers,
       tools,
-      usable_tools,
-      unavailable_tools,
+      // An inheriting skill's list equals instructions.available_brain_tools;
+      // repeating it per skill dominated the payload, so it is listed once.
+      ...(inherits ? {} : { usable_tools, unavailable_tools }),
       writes_pages: parsed?.writes_pages ?? false,
       mutating: parsed?.mutating ?? false,
     });
