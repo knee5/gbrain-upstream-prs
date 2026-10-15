@@ -167,7 +167,8 @@ export const SKILL_CATALOG_INSTRUCTIONS = {
     "When the prose says to search, store, link, or look something up, call the " +
       "correspondingly-named MCP tool on THIS server (e.g. search, query, put_page).",
     "Only call tools in this skill's `usable_tools`; tools in `unavailable_tools` " +
-      "are not callable by you on this server.",
+      "are not callable by you on this server. A skill listed without `usable_tools` " +
+      "can use every tool in `available_brain_tools`.",
     "For host-repository skills, declared `tools` narrow the usable tools. Valid " +
       "frontmatter without `tools` inherits your available brain tools; `tools: []` permits none. " +
       "Canonical shared skills follow the same rule; their other requirements gate `usable`.",

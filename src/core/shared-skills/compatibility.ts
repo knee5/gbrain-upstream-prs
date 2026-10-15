@@ -24,8 +24,10 @@ export async function listLegacySharedSkills(ctx: OperationContext, section?: st
   const access = await sharedSkillToolAccess(ctx);
   const skills = (await allSkills(ctx)).filter(() => !section || section === 'Published skills').map(skill => {
     const tools = skill.requirements.filter(r => r.startsWith('tool:')).map(r => r.slice(5));
+    // Same v1 shape as the host catalog: a skill that can use every available tool omits the repeated lists.
+    const inherits = skill.unavailable_tools.length === 0 && skill.usable_tools.length === access.length && skill.usable_tools.every((t, i) => t === access[i]);
     return { name: skill.name, description: skill.description, section: 'Published skills', triggers: skill.triggers, tools,
-      usable_tools: skill.usable_tools, unavailable_tools: skill.unavailable_tools, writes_pages: skill.writes_pages, mutating: skill.mutating };
+      ...(inherits ? {} : { usable_tools: skill.usable_tools, unavailable_tools: skill.unavailable_tools }), writes_pages: skill.writes_pages, mutating: skill.mutating };
   });
   return { schema_version: 1, skills_dir_source: 'config', count: skills.length, skills,
     instructions: { summary: SKILL_CATALOG_INSTRUCTIONS.summary, how_to_use: [...SKILL_CATALOG_INSTRUCTIONS.how_to_use], available_brain_tools: access, fetch_op: 'get_skill' } };

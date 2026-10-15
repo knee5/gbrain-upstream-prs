@@ -85,7 +85,8 @@ describe('list_skills over dispatch', () => {
             const listed = list.body.skills.find((skill: { name: string }) => skill.name === name);
             const detail = await call('get_skill', { name }, opts);
             expect(detail.isError).toBe(false);
-            expect(detail.body.usable_tools).toEqual(listed.usable_tools);
+            expect('usable_tools' in listed).toBe(name === 'declared');
+            expect(detail.body.usable_tools).toEqual(listed.usable_tools ?? list.body.instructions.available_brain_tools);
             expect(detail.body.usable_tools).not.toContain(denied);
             expect(detail.body.usable_tools).toContain(allowed);
             expect(detail.body.client_guidance.available_brain_tools).not.toContain(denied);
@@ -119,7 +120,8 @@ describe('list_skills over dispatch', () => {
               const listed = list.body.skills.find((skill: { name: string }) => skill.name === name);
               const detail = await call('get_skill', { name }, opts);
               expect(detail.isError).toBe(false);
-              expect(detail.body.usable_tools).toEqual(listed.usable_tools);
+              expect('usable_tools' in listed).toBe(name === 'declared');
+              expect(detail.body.usable_tools).toEqual(listed.usable_tools ?? list.body.instructions.available_brain_tools);
               expect(detail.body.usable_tools.includes('advisor')).toBe(enabled);
               expect(detail.body.client_guidance.available_brain_tools.includes('advisor')).toBe(enabled);
               expect(detail.body.usable_tools).toContain('search');
@@ -236,7 +238,7 @@ describe('stdio transport — catalog advertises tools as usable (#3635)', () =>
       await engine.setConfig('mcp.publish_skills', 'true');
       const r = await call('list_skills', {}, { remote: true, transport: 'stdio' });
       expect(r.isError).toBe(false);
-      const allUsable = r.body.skills.flatMap((s: any) => s.usable_tools);
+      const allUsable = [...r.body.instructions.available_brain_tools, ...r.body.skills.flatMap((s: any) => s.usable_tools ?? [])];
       expect(allUsable).not.toContain('purge_deleted_pages');
     });
   });

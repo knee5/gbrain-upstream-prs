@@ -54,9 +54,14 @@ test('a canonical skill without tools inherits the available brain tools; tools:
   expect(listed.get('onetool')!.usable_tools).toEqual(['search']);
   expect((await getSharedSkill(local, { name: 'notools' })).usable_tools).toEqual(available);
   expect((await getSharedSkill(local, { name: 'emptytools' })).usable_tools).toEqual([]);
-  const legacy = new Map((await listLegacySharedSkills(local)).skills.map(skill => [skill.name, skill]));
-  expect(legacy.get('notools')!.usable_tools).toEqual(available);
+  const legacyList = await listLegacySharedSkills(local);
+  const legacy = new Map(legacyList.skills.map(skill => [skill.name, skill]));
+  // v1 lists the inherited inventory once, in instructions, not per skill.
+  expect(legacyList.instructions.available_brain_tools).toEqual(available);
+  expect(legacy.get('notools')).not.toHaveProperty('usable_tools');
+  expect(legacy.get('notools')).not.toHaveProperty('unavailable_tools');
   expect(legacy.get('emptytools')!.usable_tools).toEqual([]);
+  expect(legacy.get('onetool')!.usable_tools).toEqual(['search']);
   expect(((await getLegacySharedSkill(local, 'notools')) as { usable_tools: string[] }).usable_tools).toEqual(available);
 }), 120_000);
 

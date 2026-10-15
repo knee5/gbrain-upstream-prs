@@ -57,20 +57,20 @@ describe('buildSkillCatalog', () => {
   test('D7 usable/unavailable split honors caller scope', () => {
     const read = buildSkillCatalog(ctx(true, ['read']), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(read.usable_tools.sort()).toEqual(['query', 'search']);
+    expect(read.usable_tools!.sort()).toEqual(['query', 'search']);
     // put_page is write-scope (blocked for read), web_search isn't an op at all
-    expect(read.unavailable_tools.sort()).toEqual(['put_page', 'web_search']);
+    expect(read.unavailable_tools!.sort()).toEqual(['put_page', 'web_search']);
 
     const admin = buildSkillCatalog(ctx(true, ['admin']), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(admin.usable_tools.sort()).toEqual(['put_page', 'query', 'search']);
+    expect(admin.usable_tools!.sort()).toEqual(['put_page', 'query', 'search']);
     expect(admin.unavailable_tools).toEqual(['web_search']);
   });
 
   test('local caller (remote=false) can use any real op', () => {
     const local = buildSkillCatalog(ctx(false), FIXTURE, 'config')
       .skills.find(s => s.name === 'brain-ops')!;
-    expect(local.usable_tools.sort()).toEqual(['put_page', 'query', 'search']);
+    expect(local.usable_tools!.sort()).toEqual(['put_page', 'query', 'search']);
     expect(local.unavailable_tools).toEqual(['web_search']); // still not an op
   });
 
