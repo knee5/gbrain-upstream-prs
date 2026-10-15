@@ -47,7 +47,7 @@ import {
   type SkillsDirSource,
 } from './repo-root.ts';
 import { loadOrDeriveManifest, type ManifestEntry } from './skill-manifest.ts';
-import { loadSkillTriggerIndex, FRONTMATTER_SECTION } from './skill-trigger-index.ts';
+import { loadResolverMdEntries, loadSkillTriggerIndex, FRONTMATTER_SECTION } from './skill-trigger-index.ts';
 import { parseSkillFrontmatter } from './skill-frontmatter.ts';
 import { operationScopesAllowed } from './scope.ts';
 import { currentVerifiedLocalWriter } from './persistence/identity.ts';
@@ -476,6 +476,13 @@ function buildTriggerMap(skillsDir: string): Map<string, TriggerInfo> {
     if (info.section === FRONTMATTER_SECTION && e.section !== FRONTMATTER_SECTION) {
       info.section = e.section;
     }
+  }
+  // The merged index keeps the frontmatter copy of a trigger that RESOLVER.md
+  // repeats, which drops that row's section. Read the resolver labels directly.
+  for (const e of loadResolverMdEntries(skillsDir)) {
+    const dir = e.isGStack || !e.section ? undefined : e.skillPath.match(/^skills\/([^/]+)\//)?.[1];
+    const info = dir ? map.get(dir) : undefined;
+    if (info?.section === FRONTMATTER_SECTION) info.section = e.section;
   }
   return map;
 }
