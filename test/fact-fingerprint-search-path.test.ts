@@ -3,9 +3,10 @@
  * functions (which back the withdrawal index and `forget`) return the same
  * bytes after the change. Authoring gate: (1) protects the fingerprint and
  * normalize outputs (pinned from master before the change), their behavior
- * under a hostile session search_path, every plpgsql function's pinned
- * search_path after a fresh migrate and after a pre-fix CREATE OR REPLACE,
- * withdrawal surviving the migration, and the fingerprint index plan;
+ * under a hostile session search_path, the pinned search_path of every
+ * plpgsql function and of the three fact fingerprint SQL functions after a
+ * fresh migrate and after a pre-fix CREATE OR REPLACE, withdrawal surviving
+ * the migration, and the fingerprint index plan with the pinned functions;
  * (2) fails when a qualification changes a fingerprint (forget would stop
  * matching), when a re-applied definition drops the pin, or when a
  * same-named function in another schema can change a fingerprint; (3) the
@@ -17,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { MIGRATIONS, runMigrations } from '../src/core/migrate.ts';
-import { FACT_WITHDRAWAL_SCHEMA_STATEMENTS } from '../src/core/facts/withdrawal-schema.ts';
+import { FACT_FINGERPRINT_FUNCTION_STATEMENTS, FACT_WITHDRAWAL_SCHEMA_STATEMENTS } from '../src/core/facts/withdrawal-schema.ts';
 import { isolatedPersistencePostgres } from './helpers/persistence-postgres.ts';
 import { testBackends } from './helpers/test-backends.ts';
 
@@ -50,6 +51,9 @@ const GOLDEN: Array<[string, string, string, string]> = [
 ];
 
 const PRE_FIX_TRIGGER = `CREATE OR REPLACE FUNCTION gbrain_queue_page_projection() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN NEW; END $fn$`;
+/** The fact fingerprint SQL functions; they pin search_path like the plpgsql functions. */
+const FACT_SQL_FUNCTIONS = ['gbrain_fact_fingerprint', 'gbrain_fact_fingerprint_v1', 'gbrain_fact_normalize'];
+const PIN = ' SET search_path = pg_catalog, public';
 
 for (const kind of testBackends()) {
   describe(`function search_path and fact fingerprints (${kind})`, () => {
@@ -70,22 +74,28 @@ for (const kind of testBackends()) {
 
     const fingerprints = (claim: string) => engine.executeRaw<{ fp: string; v1: string; norm: string }>(
       'SELECT gbrain_fact_fingerprint($1) AS fp, gbrain_fact_fingerprint_v1($1) AS v1, gbrain_fact_normalize($1) AS norm', [claim]);
-    const unpinned = () => engine.executeRaw<{ sig: string }>(`SELECT p.oid::regprocedure::text AS sig FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
-      WHERE n.nspname = 'public' AND l.lanname = 'plpgsql' AND p.proname LIKE 'gbrain\\_%'
-        AND NOT ('search_path=pg_catalog, public' = ANY(COALESCE(p.proconfig, '{}'::text[])))`);
-    const searchPathMigration = MIGRATIONS.find(m => m.name.endsWith('function_search_path'))!;
-    const rerunSearchPathMigration = async () => {
-      expect(searchPathMigration).toBeDefined();
-      await engine.setConfig('version', String(searchPathMigration.version - 1));
-      await runMigrations(engine);
-    };
-
-    test('fingerprint, v1 fingerprint and normalize outputs are byte-identical to master', async () => {
+    const expectGoldenOutputs = async () => {
       for (const [claim, fp, v1, norm] of GOLDEN) {
         const [row] = await fingerprints(claim);
         expect([claim, row!.fp, row!.v1, row!.norm]).toEqual([claim, fp, v1, norm]);
       }
+    };
+    const unpinned = () => engine.executeRaw<{ sig: string }>(`SELECT p.oid::regprocedure::text AS sig FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
+      WHERE n.nspname = 'public' AND ((l.lanname = 'plpgsql' AND p.proname LIKE 'gbrain\\_%') OR p.proname = ANY($1::text[]))
+        AND NOT ('search_path=pg_catalog, public' = ANY(COALESCE(p.proconfig, '{}'::text[])))
+      ORDER BY p.oid::regprocedure::text COLLATE "C"`, [FACT_SQL_FUNCTIONS]);
+    const searchPathMigration = MIGRATIONS.find(m => m.name.endsWith('function_search_path'))!;
+    const factPinMigration = MIGRATIONS.find(m => m.name === 'fact_fingerprint_search_path')!;
+    const rerunFrom = async (migration: (typeof MIGRATIONS)[number]) => {
+      expect(migration).toBeDefined();
+      await engine.setConfig('version', String(migration.version - 1));
+      await runMigrations(engine);
+    };
+    const rerunSearchPathMigration = () => rerunFrom(searchPathMigration);
+
+    test('fingerprint, v1 fingerprint and normalize outputs are byte-identical to master', async () => {
+      await expectGoldenOutputs();
     });
 
     test('a hostile session search_path cannot change a fingerprint', async () => {
@@ -104,7 +114,7 @@ for (const kind of testBackends()) {
       }
     });
 
-    test('every gbrain plpgsql function pins search_path after a fresh migrate', async () => {
+    test('every gbrain plpgsql function and fact fingerprint SQL function pins search_path after a fresh migrate', async () => {
       expect(await unpinned()).toEqual([]);
     });
 
@@ -118,6 +128,18 @@ for (const kind of testBackends()) {
       expect(await unpinned()).toEqual([]);
       await engine.executeRaw(`CREATE OR REPLACE FUNCTION gbrain_queue_page_projection() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $fn$${queued!.src}$fn$`);
       expect(await unpinned()).toEqual([]);
+    }, 60_000);
+
+    test('the fact pin migration re-pins pre-fix fact function definitions with the same outputs', async () => {
+      // A brain that ran the search_path migration before the SQL functions carried the pin.
+      for (const statement of FACT_FINGERPRINT_FUNCTION_STATEMENTS) {
+        expect(statement).toContain(PIN);
+        await engine.executeRaw(statement.replace(PIN, ''));
+      }
+      expect((await unpinned()).map(r => r.sig)).toEqual(FACT_SQL_FUNCTIONS.map(name => `${name}(text)`));
+      await rerunFrom(factPinMigration);
+      expect(await unpinned()).toEqual([]);
+      await expectGoldenOutputs();
     }, 60_000);
 
     test('a withdrawn fact stays withdrawn across the migration', async () => {

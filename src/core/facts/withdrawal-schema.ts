@@ -15,24 +15,28 @@ export function normalizeLoweredClaim(claim: string): string {
   return out.replace(/ +/g, ' ').replace(/\.(?=[. ]|$)/g, ' ').replace(/ +/g, ' ').replace(/^ | $/g, '');
 }
 
-// Built-ins are schema-qualified instead of pinning search_path on these SQL
-// functions, which must stay inlinable (an index expression uses them); the
-// results are byte-identical (test/fact-fingerprint-search-path.test.ts).
+// Built-ins are schema-qualified, and the SQL functions below also pin
+// search_path like every gbrain plpgsql function. A SET clause stops the
+// planner inlining a SQL function, which matters little here: the two
+// fingerprints were never inlined (convert_to is not immutable), only
+// gbrain_fact_normalize was, and no index uses it. The fingerprint index still
+// matches gbrain_fact_fingerprint(fact) calls. Results are byte-identical
+// (test/fact-fingerprint-search-path.test.ts).
 const NORMALIZE_CLAIM_SQL = `pg_catalog.btrim(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.translate(pg_catalog.lower(claim), '${FINGERPRINT_PUNCTUATION.replace(/'/g, "''")}', '${' '.repeat([...FINGERPRINT_PUNCTUATION].length)}'), '[[:space:]]+', ' ', 'g'), '\\.(?=[. ]|$)', ' ', 'g'), ' +', ' ', 'g'), ' ')`;
 
-/** The fingerprint SQL functions, also re-created on their own by the search_path migration. */
+/** The fingerprint SQL functions, also re-created on their own by the search_path migrations (v211 and fact_fingerprint_search_path). */
 export const FACT_FINGERPRINT_FUNCTION_STATEMENTS = [
   `CREATE OR REPLACE FUNCTION gbrain_fact_fingerprint_v1(claim TEXT) RETURNS TEXT
-    LANGUAGE SQL IMMUTABLE STRICT AS $fn$
+    LANGUAGE SQL IMMUTABLE STRICT SET search_path = pg_catalog, public AS $fn$
       SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.btrim(claim)), '[[:space:]]+', ' ', 'g'), 'UTF8')), 'hex')
     $fn$`,
   `CREATE OR REPLACE FUNCTION gbrain_fact_normalize(claim TEXT) RETURNS TEXT
-    LANGUAGE SQL IMMUTABLE STRICT AS $fn$ SELECT ${NORMALIZE_CLAIM_SQL} $fn$`,
-  // Inlined rather than calling gbrain_fact_normalize: index builds resolve
+    LANGUAGE SQL IMMUTABLE STRICT SET search_path = pg_catalog, public AS $fn$ SELECT ${NORMALIZE_CLAIM_SQL} $fn$`,
+  // Repeats the normalize SQL rather than calling gbrain_fact_normalize: index builds resolve
   // functions with a restricted search_path, so the index expression must
   // reference only built-ins.
   `CREATE OR REPLACE FUNCTION gbrain_fact_fingerprint(claim TEXT) RETURNS TEXT
-    LANGUAGE SQL IMMUTABLE STRICT AS $fn$ SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(${NORMALIZE_CLAIM_SQL}, 'UTF8')), 'hex') $fn$`,
+    LANGUAGE SQL IMMUTABLE STRICT SET search_path = pg_catalog, public AS $fn$ SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(${NORMALIZE_CLAIM_SQL}, 'UTF8')), 'hex') $fn$`,
 ] as const;
 
 /**
