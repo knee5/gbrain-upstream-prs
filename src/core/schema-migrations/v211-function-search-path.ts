@@ -9,9 +9,10 @@ import type { Migration } from './types.ts';
 // search_path. Existing brains are ALTERed by regprocedure (functions with
 // arguments included) wherever no setting is pinned yet; the definition
 // sources carry the same SET for fresh installs and CREATE OR REPLACE
-// re-applies. The fact fingerprint SQL functions stay inlinable for their
-// index expression, so they are re-created with schema-qualified built-ins
-// instead (byte-identical results). Re-running finds nothing left to change.
+// re-applies. The fact fingerprint SQL functions are re-created with
+// schema-qualified built-ins (byte-identical results); their definitions now
+// pin search_path too, and the fact_fingerprint_search_path migration pins
+// brains that already ran this one. Re-running finds nothing left to change.
 export const v211: Migration = {
   version: 211,
   name: 'function_search_path',

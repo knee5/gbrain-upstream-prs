@@ -11,8 +11,9 @@
 # schemas and the TS schema modules), except src/core/schema-migrations/,
 # whose historical bodies are append-only. A header is matched whatever its
 # argument list and however it is spread over lines, up to its `AS $tag$`.
-# LANGUAGE sql functions are exempt: they stay inlinable (an index expression
-# may use them), so they schema-qualify their built-ins instead. Migration-only
+# LANGUAGE sql functions are exempt: a SET clause stops the planner inlining a
+# SQL function, so each one decides. The fact fingerprint SQL functions pin it
+# and schema-qualify their built-ins. Migration-only functions and those SQL
 # functions are covered at runtime by test/fact-fingerprint-search-path.test.ts,
 # which checks pg_proc.proconfig after a fresh migrate.
 #

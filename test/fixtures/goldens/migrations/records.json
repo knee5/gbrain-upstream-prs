@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 269,
+    "count": 270,
     "gaps": [
       17,
       18,
@@ -79,7 +79,7 @@
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67",
       "withSchemaLockTimeout": "95605bd3004955e11e936c7a4aa6889319b401098abf9db18ef3e48da2c3fc59"
     },
-    "latest": 274,
+    "latest": 275,
     "records": [
       {
         "handler": {
@@ -2234,8 +2234,8 @@
         "idempotent": true,
         "name": "durable_fact_withdrawals",
         "sql": {
-          "length": 3221,
-          "sha256": "e9e527dac29fc5b4fe57f9aba168b5aab56726d725b25ec089794f5221d8b01e"
+          "length": 3332,
+          "sha256": "93857aefd55f958ae30afaf1a4cae4b5c5f63670ad5583bdf1d8458de7b18ca4"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -2536,8 +2536,8 @@
         "idempotent": true,
         "name": "fact_withdrawal_subject",
         "sql": {
-          "length": 3193,
-          "sha256": "d6d5fdfcea9c4deae6debb67760cbf7c29b1747c62dce3ad721ea93e73972dc1"
+          "length": 3304,
+          "sha256": "e0a7b084e7d6ee9e393905ba570dfcfb8b786417ba7b4cd4be346fb7e1bfb0da"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -2620,8 +2620,8 @@
         "idempotent": true,
         "name": "fact_withdrawal_normalized_fingerprint",
         "sql": {
-          "length": 3937,
-          "sha256": "68db3dc02333d00847d9d8ce4c47d484b5a67cbbf5ce619eba8b6a263eb07663"
+          "length": 4048,
+          "sha256": "69f0e20dd1a0ac95b0c157ea9beee04f9f06d5a8d06e2d8c6b3bf1f24a411abf"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -3182,8 +3182,8 @@
         "idempotent": true,
         "name": "function_search_path",
         "sql": {
-          "length": 1861,
-          "sha256": "5370a8f6ef1ca8787e677af523927605c2fa1de61674efd5b006a5673fbb1eca"
+          "length": 1972,
+          "sha256": "6676ebe72affbadefefb4dfb3f284a8ef81ba775681625adc4490ee6a918c2a4"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -4410,6 +4410,19 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 274
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "fact_fingerprint_search_path",
+        "sql": {
+          "length": 1404,
+          "sha256": "a4ceffc120f3c7cf26dac09507ff88c246a1e0ead9e0e29224beebde16264eef"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 275
       }
     ],
     "versions": [
@@ -4681,7 +4694,8 @@
       271,
       272,
       273,
-      274
+      274,
+      275
     ]
   },
   "normalizer": "migrations-record-v1"
